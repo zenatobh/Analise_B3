@@ -7,9 +7,9 @@ Deploy:  Streamlit Community Cloud apontando para este arquivo.
 import pandas as pd
 import streamlit as st
 
-from analise_ativos import (DIAS_UTEIS_ANO, JANELA_PLOT, NAO_ACOES, TICKERS,
-                            baixar_precos, moeda, serie, tabela_painel,
-                            tabela_resumo)
+from analise_ativos import (DIAS_UTEIS_ANO, JANELA_PLOT, MMA_LENTA, MMA_RAPIDA,
+                            NAO_ACOES, TICKERS, baixar_precos, moeda, serie,
+                            status_sinal, tabela_painel, tabela_resumo)
 from graficos_plotly import aplicar_zoom, config_zoom, fig_ativo, fig_hist
 
 st.set_page_config(page_title="Ativos B3", page_icon="📈", layout="centered")
@@ -86,17 +86,25 @@ with aba_ativo:
               help="Distância do preço atual à média dos últimos 248 pregões, "
                    "em desvios-padrão (mesma referência das bandas do gráfico)")
 
+    # Sinal de compra: difusor short > long  E  MMA63 > MMA84
+    sinal = status_sinal(precos, ticker)
+    if sinal["ativo"]:
+        dias_txt = "começou hoje" if sinal["dias"] == 1 else f"há {sinal['dias']} pregões"
+        st.success(f"**Sinal de compra ativo** — {dias_txt} "
+                   f"(desde {sinal['inicio']:%d/%m/%y})", icon="🟢")
+    else:
+        st.info(f"**Sem sinal de compra** — falta: {' e '.join(sinal['faltam'])}", icon="⚪")
+
     escolha = st.segmented_control("Período", list(PERIODOS), default=PERIODO_PADRAO,
                                    label_visibility="collapsed")
     periodo = PERIODOS[escolha or PERIODO_PADRAO] or len(s)
 
     with st.expander("Opções"):
-        percentual = st.toggle("Difusor em %", value=False)
         zoom = st.toggle("Zoom no gráfico", value=False,
                          help="Ligado: arraste para ampliar uma região e toque duas vezes "
                               "para voltar. Desligado: o gráfico não muda ao tocar.")
 
-    mostrar_fig(fig_ativo(precos, ticker, period=periodo, percentual=percentual), zoom)
+    mostrar_fig(fig_ativo(precos, ticker, period=periodo), zoom)
     st.caption("Arraste sobre o gráfico para dar zoom · toque duplo para voltar."
                if zoom else
                "Toque para ver os valores · use dois dedos para ampliar a tela.")
@@ -107,13 +115,19 @@ with aba_ativo:
 # ----------------------------------------------------------------------------
 with aba_painel:
     painel = tabela_painel(precos, dias=JANELA_PLOT)
-    st.caption(f"Faixa, média e σ dos últimos {JANELA_PLOT} pregões de cada ativo. "
+    st.caption(f"Sinal: difusor short > long e MMA{MMA_RAPIDA} > MMA{MMA_LENTA}. "
+               f"Faixa, média e σ dos últimos {JANELA_PLOT} pregões. "
                "Toque no nome de uma coluna para ordenar.")
     st.dataframe(
         painel.style.map(cor_variacao, subset=["Dia", "12 meses"]),
         width="stretch",
         height=35 * (len(painel) + 1) + 3,      # mostra todas as linhas sem rolagem
         column_config={
+            "Sinal":    st.column_config.CheckboxColumn(
+                "Sinal", help="Sinal de compra ativo no último pregão"),
+            "Há":       st.column_config.NumberColumn(
+                "Há (pregões)", format="%d",
+                help="Há quantos pregões o sinal está ativo (1 = começou hoje)"),
             "Último":   st.column_config.NumberColumn(format="localized"),
             "Dia":      st.column_config.NumberColumn(format="percent"),
             "12 meses": st.column_config.NumberColumn(format="percent"),
