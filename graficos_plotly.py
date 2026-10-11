@@ -159,13 +159,16 @@ def fig_hist(precos, ticker, anos=3, bins=30, altura=None):
                                                   "%{y} pregões<extra></extra>")),
                       row=r, col=1)
         fig.add_vline(x=atual, line=linha_atual, row=r, col=1)
-        fig.add_annotation(text=f"<b>{rotulo}</b>", font=dict(color=cor, size=11),
-                           xref="x domain" if r == 1 else f"x{r} domain",
-                           yref=f"y{r} domain", x=0.01, y=0.95,
-                           xanchor="left", yanchor="top", showarrow=False)
-        fig.update_xaxes(matches="x2", range=[minimo, maximo], tickformat=",.0f",
+        # Período como título do eixo y (não cobre as barras)
+        fig.update_yaxes(title_text=f"<b>{rotulo}</b>",
+                         title_font=dict(color=cor, size=10), row=r, col=1)
+        fig.update_xaxes(range=[minimo, maximo], tickformat=",.0f",
                          showticklabels=(r == n + 1), row=r, col=1)
-        fig.update_yaxes(matches="y2", row=r, col=1)
+        if r > 2:
+            # Eixos ligados ao 1º histograma: mesma escala e zoom sincronizado.
+            # (Ligar o x2/y2 a ele mesmo quebra o ajuste automático da escala.)
+            fig.update_xaxes(matches="x2", row=r, col=1)
+            fig.update_yaxes(matches="y2", row=r, col=1)
 
     fig.update_layout(
         **_LAYOUT_BASE,
@@ -178,6 +181,4 @@ def fig_hist(precos, ticker, anos=3, bins=30, altura=None):
     fig.update_xaxes(showgrid=False)
     fig.update_yaxes(showgrid=False)
     fig.update_yaxes(range=[minimo, maximo], tickformat=",.0f", row=1, col=1)
-    fig.update_yaxes(title_text="pregões", title_font=dict(size=10),
-                     row=1 + (n + 1) // 2, col=1)
     return fig
