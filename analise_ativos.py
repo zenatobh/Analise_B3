@@ -41,6 +41,9 @@ BANDAS = [  # (multiplicador do desvio, cor, espessura); None = verde acima / ve
 
 EMA_FAST, EMA_SLOW, EMA_MEDIUM, EMA_LONG = 21, 55, 34, 89
 
+# Sinal de compra: difusor short > long  E  MMA rápida > MMA lenta
+MMA_RAPIDA, MMA_LENTA = 63, 84
+
 plt.style.use("seaborn-v0_8-colorblind")
 
 _RE_B3 = re.compile(r"[A-Z]{4}\d{1,2}")
@@ -93,7 +96,8 @@ def tabela_resumo(precos, dias=JANELA_PLOT * 2, excluir=NAO_ACOES):
 def tabela_painel(precos, dias=JANELA_PLOT):
     """
     Visão geral de todos os ativos nos últimos `dias` pregões de cada um:
-    último preço, variação no dia e em 12 meses, posição do preço na faixa
+    sinal de compra (e há quantos pregões), último preço, variação no dia e em
+    12 meses, posição do preço na faixa
     mín–máx do período (0 = na mínima, 1 = na máxima) e distância da média em σ.
     """
     linhas = {}
@@ -101,7 +105,10 @@ def tabela_painel(precos, dias=JANELA_PLOT):
         s = serie(precos, ticker)
         j = s.tail(dias)
         ultimo, minimo, maximo = j.iloc[-1], j.min(), j.max()
+        st_sinal = status_sinal(precos, ticker)
         linhas[ticker] = {
+            "Sinal":    st_sinal["ativo"],
+            "Há":       st_sinal["dias"],
             "Último":   ultimo,
             "Dia":      ultimo / s.iloc[-2] - 1 if len(s) > 1 else np.nan,
             "12 meses": ultimo / s.iloc[-min(len(s), DIAS_UTEIS_ANO)] - 1,
@@ -120,17 +127,56 @@ def mma(s, periodo):
     return s.rolling(periodo).mean()
 
 
-def difusor(precos, ticker, period=DIAS_UTEIS_ANO, percentual=False):
+def difusor(precos, ticker, period=DIAS_UTEIS_ANO):
     """Difusor de fluxo: EMA21-EMA55 e suas EMAs de 34 e 89 (série cheia para aquecimento)."""
     s = serie(precos, ticker)
     fast = s.ewm(span=EMA_FAST, adjust=False).mean()
     slow = s.ewm(span=EMA_SLOW, adjust=False).mean()
-    short = (fast / slow - 1) * 100 if percentual else fast - slow
+    short = fast - slow
     return pd.DataFrame({
         "short":  short,
         "medium": short.ewm(span=EMA_MEDIUM, adjust=False).mean(),
         "long":   short.ewm(span=EMA_LONG, adjust=False).mean(),
     }).tail(period)
+
+
+def sinal_compra(precos, ticker):
+    """
+    Sinal de compra dia a dia (série completa do ativo):
+      difusor  — short (EMA21−EMA55) acima do long (EMA89 do short)
+      mma      — MMA63 acima da MMA84
+      ativo    — as duas condições ao mesmo tempo
+    Dias sem MMA84 calculada (início da série) contam como False.
+    """
+    s = serie(precos, ticker)
+    dif = difusor(precos, ticker, period=len(s))
+    return pd.DataFrame({
+        "difusor": dif["short"] > dif["long"],
+        "mma":     mma(s, MMA_RAPIDA) > mma(s, MMA_LENTA),
+    }).assign(ativo=lambda d: d["difusor"] & d["mma"])
+
+
+def status_sinal(precos, ticker):
+    """
+    Situação do sinal no último pregão:
+      ativo   — bool
+      dias    — há quantos pregões o sinal está ativo (1 = começou hoje); None se inativo
+      inicio  — data em que o sinal atual começou; None se inativo
+      faltam  — condições não atendidas hoje (lista de textos)
+    """
+    sc = sinal_compra(precos, ticker)
+    hoje = sc.iloc[-1]
+    faltam = []
+    if not hoje["difusor"]:
+        faltam.append("difusor short > long")
+    if not hoje["mma"]:
+        faltam.append(f"MMA{MMA_RAPIDA} > MMA{MMA_LENTA}")
+    if not hoje["ativo"]:
+        return {"ativo": False, "dias": None, "inicio": None, "faltam": faltam}
+    # Comprimento da sequência final de dias ativos
+    inativos = sc.index[~sc["ativo"]]
+    corrida = sc.loc[sc.index > inativos[-1]] if len(inativos) else sc
+    return {"ativo": True, "dias": len(corrida), "inicio": corrida.index[0], "faltam": []}
 
 
 # ----------------------------------------------------------------------------
@@ -160,7 +206,7 @@ def _finalizar(fig, mostrar):
 # ----------------------------------------------------------------------------
 # Gráficos
 # ----------------------------------------------------------------------------
-def plot_ativo(precos, ticker, period=JANELA_PLOT, percentual=False,
+def plot_ativo(precos, ticker, period=JANELA_PLOT,
                figsize=(16, 8), mostrar=True):
     s_full = serie(precos, ticker)
     s = s_full.tail(period)
@@ -189,7 +235,7 @@ def plot_ativo(precos, ticker, period=JANELA_PLOT, percentual=False,
     ax_p.grid(False)
 
     # Difusor
-    dif = difusor(precos, ticker, period, percentual)
+    dif = difusor(precos, ticker, period)
     ax_d.plot(dif["long"],   color="#808080F0", lw=3, label=f"Long ({EMA_LONG})")
     ax_d.plot(dif["short"],  color="red",       lw=2, label=f"Short ({EMA_FAST}-{EMA_SLOW})")
     ax_d.axhline(0, color="k", lw=0.6)
