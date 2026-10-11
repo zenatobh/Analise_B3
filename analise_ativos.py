@@ -22,8 +22,7 @@ import yfinance as yf
 # ----------------------------------------------------------------------------
 # Configuração
 # ----------------------------------------------------------------------------
-TICKERS = ["ITUB4", "BBAS3", "PETR4", "VALE3", "ABEV3", "EGIE3", "VIVT3",
-           "WEGE3", "RENT3", "BBSE3", "BOVA11", "^BVSP", "^GSPC", "USDBRL=X"]
+TICKERS = ["ITUB4", "BBAS3", "PETR4", "VALE3", "ABEV3" , "VIVT3","BBSE3", "BOVA11", "^BVSP", "^GSPC", "USDBRL=X"]
 
 NOMES = {"^BVSP": "IBOV", "^GSPC": "SP500", "USDBRL=X": "USDBRL"}
 NAO_ACOES = list(NOMES.values())
