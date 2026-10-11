@@ -97,56 +97,70 @@ def fig_ativo(precos, ticker, period=JANELA_PLOT, percentual=False, altura=620):
     return fig
 
 
-def fig_hist(precos, ticker, anos=3, bins=30, altura=620):
+def fig_hist(precos, ticker, anos=3, bins=30, altura=None):
     """
-    Distribuição anual de preços, adaptada ao celular: em vez de `anos` colunas lado
-    a lado, cada ano vira uma cor — linha do preço (painel 1) e histogramas
-    sobrepostos (painel 2), com o preço atual marcado nos dois.
+    Distribuição anual de preços, adaptada ao celular: as `anos` colunas do notebook
+    viram linhas empilhadas. Painel 1: preço com cada ano numa cor. Painéis seguintes:
+    um histograma por ano, todos com o mesmo eixo de preço e a mesma escala de
+    contagem, para comparar diretamente. O preço atual aparece em vermelho.
     """
     s = serie(precos, ticker)
     atual, fim = s.iloc[-1], s.index[-1]
     minimo, maximo = s.min() * 0.95, s.max() * 1.05
     tam_bin = (maximo - minimo) / (bins - 1)
 
-    fig = make_subplots(rows=2, cols=1, row_heights=[0.5, 0.5], vertical_spacing=0.10)
-
+    # Recorta as janelas anuais (mais antiga primeiro)
+    janelas = []
     for i in range(anos):
         k = anos - i
         ini_j = fim - pd.DateOffset(years=k)
         fim_j = fim - pd.DateOffset(years=k - 1)
         janela = s[(s.index > ini_j) & (s.index <= fim_j)]
-        if janela.empty:
-            continue
-        cor = CORES_ANOS[i % len(CORES_ANOS)]
-        nome = f"{janela.index[0]:%d/%m/%y} a {janela.index[-1]:%d/%m/%y}"
+        if not janela.empty:
+            janelas.append((janela, CORES_ANOS[i % len(CORES_ANOS)]))
+    n = len(janelas)
 
-        fig.add_trace(go.Scatter(x=janela.index, y=janela, name=nome, legendgroup=nome,
+    fig = make_subplots(rows=1 + n, cols=1, vertical_spacing=0.035,
+                        row_heights=[0.34] + [0.66 / n] * n)
+    linha_atual = dict(color="red", dash="dashdot", width=1)
+
+    # Painel 1 — preço por ano
+    for janela, cor in janelas:
+        nome = f"{janela.index[0]:%d/%m/%y} a {janela.index[-1]:%d/%m/%y}"
+        fig.add_trace(go.Scatter(x=janela.index, y=janela, name=nome,
                                  line=dict(color=cor, width=1.5),
                                  hovertemplate="%{y:,.2f}"), row=1, col=1)
-        fig.add_trace(go.Histogram(x=janela, name=nome, legendgroup=nome, showlegend=False,
+    fig.add_hline(y=atual, line=linha_atual, row=1, col=1)
+
+    # Painéis 2..n+1 — um histograma por ano, eixos compartilhados entre eles
+    for r, (janela, cor) in enumerate(janelas, start=2):
+        rotulo = f"{janela.index[0]:%m/%y}–{janela.index[-1]:%m/%y}"
+        fig.add_trace(go.Histogram(x=janela, name=rotulo, showlegend=False,
                                    xbins=dict(start=minimo, end=maximo, size=tam_bin),
                                    marker=dict(color=cor, line=dict(color="black", width=0.5)),
-                                   opacity=0.55,
-                                   hovertemplate="%{x}<br>%{y} pregões<extra></extra>"),
-                      row=2, col=1)
-
-    linha_atual = dict(color="red", dash="dashdot", width=1)
-    fig.add_hline(y=atual, line=linha_atual, row=1, col=1)
-    fig.add_vline(x=atual, line=linha_atual, row=2, col=1)
+                                   hovertemplate=(f"{rotulo}<br>%{{x}}<br>"
+                                                  "%{y} pregões<extra></extra>")),
+                      row=r, col=1)
+        fig.add_vline(x=atual, line=linha_atual, row=r, col=1)
+        fig.add_annotation(text=f"<b>{rotulo}</b>", font=dict(color=cor, size=11),
+                           xref="x domain" if r == 1 else f"x{r} domain",
+                           yref=f"y{r} domain", x=0.01, y=0.95,
+                           xanchor="left", yanchor="top", showarrow=False)
+        fig.update_xaxes(matches="x2", range=[minimo, maximo], tickformat=",.0f",
+                         showticklabels=(r == n + 1), row=r, col=1)
+        fig.update_yaxes(matches="y2", row=r, col=1)
 
     fig.update_layout(
         **_LAYOUT_BASE,
-        height=altura,
-        barmode="overlay",
+        height=altura or 300 + 150 * n,
+        bargap=0.05,
         title=dict(text=(f"<b>{ticker}</b> — distribuição anual de preços<br>"
                          f"<sup>Atual: {moeda(atual)}</sup>"), x=0, font=dict(size=15)),
     )
-    fig.update_layout(margin=dict(t=95), legend=dict(y=1.02))
+    fig.update_layout(hovermode="closest", margin=dict(t=95), legend=dict(y=1.02))
     fig.update_xaxes(showgrid=False)
     fig.update_yaxes(showgrid=False)
-    fig.update_yaxes(range=[minimo, maximo], tickformat=",.2f", row=1, col=1)
-    fig.update_xaxes(range=[minimo, maximo], tickformat=",.2f", row=2, col=1)
-    fig.update_yaxes(title_text="pregões", row=2, col=1)
-    # No histograma o hover por eixo x unificado não faz sentido
-    fig.update_xaxes(hoverformat=",.2f", row=2, col=1)
+    fig.update_yaxes(range=[minimo, maximo], tickformat=",.0f", row=1, col=1)
+    fig.update_yaxes(title_text="pregões", title_font=dict(size=10),
+                     row=1 + (n + 1) // 2, col=1)
     return fig
