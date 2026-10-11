@@ -90,6 +90,29 @@ def tabela_resumo(precos, dias=JANELA_PLOT * 2, excluir=NAO_ACOES):
     return precos[cols].tail(dias).describe().round(2)
 
 
+def tabela_painel(precos, dias=JANELA_PLOT):
+    """
+    Visão geral de todos os ativos nos últimos `dias` pregões de cada um:
+    último preço, variação no dia e em 12 meses, posição do preço na faixa
+    mín–máx do período (0 = na mínima, 1 = na máxima) e distância da média em σ.
+    """
+    linhas = {}
+    for ticker in precos.columns:
+        s = serie(precos, ticker)
+        j = s.tail(dias)
+        ultimo, minimo, maximo = j.iloc[-1], j.min(), j.max()
+        linhas[ticker] = {
+            "Último":   ultimo,
+            "Dia":      ultimo / s.iloc[-2] - 1 if len(s) > 1 else np.nan,
+            "12 meses": ultimo / s.iloc[-min(len(s), DIAS_UTEIS_ANO)] - 1,
+            "Faixa":    (ultimo - minimo) / (maximo - minimo) if maximo > minimo else np.nan,
+            "σ média":  (ultimo - j.mean()) / j.std() if j.std() > 0 else np.nan,
+            "Mín":      minimo,
+            "Máx":      maximo,
+        }
+    return pd.DataFrame.from_dict(linhas, orient="index")
+
+
 # ----------------------------------------------------------------------------
 # Indicadores
 # ----------------------------------------------------------------------------
