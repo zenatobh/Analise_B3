@@ -10,9 +10,9 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from analise_ativos import (BANDAS, EMA_FAST, EMA_LONG, EMA_SLOW,
-                            JANELA_PLOT, K_STOP_GAIN, K_STOP_LOSS, MMAS, difusor,
-                            mma, moeda, operacoes, serie, status_operacao)
+from analise_ativos import (BANDAS, EMA_FAST, EMA_LONG, EMA_SLOW, JANELA_PLOT,
+                            K_SIGMA, K_STOP_GAIN, K_STOP_LOSS, MMAS, bandas_moveis,
+                            difusor, mma, moeda, operacoes, serie)
 
 # Cores equivalentes às do matplotlib ("seaborn-v0_8-colorblind")
 COR_PRECO = "#0173B2"
@@ -114,14 +114,25 @@ def fig_ativo(precos, ticker, period=JANELA_PLOT, altura=620,
     _marcas(saidas["gain"], "Stop gain", "triangle-down", COR_GAIN)
     _marcas(saidas["loss"], "Stop loss", "triangle-down", COR_LOSS)
 
-    # Operação aberta: níveis atuais de stop gain e stop loss
-    st_op = status_operacao(precos, ticker, k_gain, k_loss)
-    if st_op["aberta"]:
-        for nivel, cor, texto in ((st_op["stop_gain"], COR_GAIN, "stop gain"),
-                                  (st_op["stop_loss"], COR_LOSS, "stop loss")):
-            fig.add_hline(y=nivel, line=dict(color=cor, dash="dot", width=1.6),
-                          annotation_text=texto, annotation_position="bottom right",
-                          annotation_font=dict(size=9, color=cor), row=1, col=1)
+    # Limites que a regra usou em cada dia (bandas dos 248 pregões até aquele dia):
+    #   teto da entrada (+1σ) sempre; stop gain e stop loss só durante as operações
+    mu, sd = bandas_moveis(s_full)
+    mu, sd = mu.loc[ini_janela:], sd.loc[ini_janela:]
+    fig.add_trace(go.Scatter(x=mu.index, y=mu + K_SIGMA * sd, name="Teto entrada",
+                             showlegend=False, line=dict(color=CINZA_FORTE, dash="dot",
+                                                         width=1)), row=1, col=1)
+    em_op = pd.Series(False, index=mu.index)
+    for _, op in ops.iterrows():
+        em_op.loc[op["entrada"]:(op["saida"] if pd.notna(op["saida"]) else fim_janela)] = True
+    for k, cor, nome in ((k_gain, COR_GAIN, "Stop gain"), (k_loss, COR_LOSS, "Stop loss")):
+        nivel = (mu + k * sd).where(em_op)
+        fig.add_trace(go.Scatter(x=nivel.index, y=nivel, name=f"Limite {nome.lower()}",
+                                 showlegend=False, connectgaps=False,
+                                 line=dict(color=cor, dash="dot", width=1.6)), row=1, col=1)
+        if em_op.iloc[-1]:                                  # operação aberta: rótulo no fim
+            fig.add_annotation(x=nivel.index[-1], y=nivel.iloc[-1], text=nome.lower(),
+                               xanchor="right", yanchor="bottom", showarrow=False,
+                               font=dict(size=9, color=cor), row=1, col=1)
 
     # Bandas estáticas da janela: faixa ±1σ sombreada, linhas suaves e rótulos à direita
     fig.add_hrect(y0=media - std, y1=media + std, fillcolor="rgba(1,115,178,0.07)",
