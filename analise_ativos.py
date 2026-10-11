@@ -42,13 +42,13 @@ BANDAS = [  # (multiplicador do desvio, cor, espessura); None = verde acima / ve
 EMA_FAST, EMA_SLOW, EMA_MEDIUM, EMA_LONG = 21, 55, 34, 89
 
 # Operação (bandas móveis de JANELA_PLOT pregões: média μ e desvio σ até cada dia)
-#   Entrada:    difusor short > long  E  MMA63 > MMA84  E  μ + K_STOP_LOSS·σ < preço < μ + K_SIGMA·σ
+#   Entrada:    difusor short > long  E  MMA63 > MMA84  E  preço < μ + K_SIGMA·σ
 #   Stop gain:  fechamento acima de μ + K_STOP_GAIN·σ
 #   Stop loss:  fechamento abaixo de μ + K_STOP_LOSS·σ
 MMA_RAPIDA, MMA_LENTA = 63, 84
 K_SIGMA = 1          # teto da entrada (+1σ)
 K_STOP_GAIN = 2      # +2σ
-K_STOP_LOSS = -1     # −1σ (também é o piso da entrada)
+K_STOP_LOSS = -1     # −1σ
 
 plt.style.use("seaborn-v0_8-colorblind")
 
@@ -154,13 +154,15 @@ def bandas_moveis(s):
     return janela.mean(), janela.std()
 
 
-def sinal_compra(precos, ticker, k_loss=K_STOP_LOSS):
+def sinal_compra(precos, ticker):
     """
     Condições de entrada dia a dia (série completa do ativo):
       difusor  — short (EMA21−EMA55) acima do long (EMA89 do short)
       mma      — MMA63 acima da MMA84
-      preco    — preço entre μ + k_loss·σ e μ + 1σ (bandas móveis, sem olhar o futuro;
-                 no último pregão são as mesmas bandas do gráfico em 1A)
+      preco    — preço abaixo de μ + 1σ (banda móvel, sem olhar o futuro; no último
+                 pregão é a mesma banda do gráfico em 1A). Sem limite inferior: se a
+                 entrada ocorrer abaixo do stop loss, a operação sai no pregão seguinte
+                 caso o preço continue abaixo dele.
       ativo    — as três condições ao mesmo tempo
     Dias sem MMA84 calculada (início da série) contam como False.
     """
@@ -170,7 +172,7 @@ def sinal_compra(precos, ticker, k_loss=K_STOP_LOSS):
     return pd.DataFrame({
         "difusor": dif["short"] > dif["long"],
         "mma":     mma(s, MMA_RAPIDA) > mma(s, MMA_LENTA),
-        "preco":   (s > mu + k_loss * sd) & (s < mu + K_SIGMA * sd),
+        "preco":   s < mu + K_SIGMA * sd,
     }).assign(ativo=lambda d: d["difusor"] & d["mma"] & d["preco"])
 
 
@@ -186,7 +188,7 @@ def operacoes(precos, ticker, k_gain=K_STOP_GAIN, k_loss=K_STOP_LOSS):
     preco_saida, motivo ("gain", "loss" ou None se aberta), resultado (fração) e dias.
     """
     s = serie(precos, ticker)
-    ativo = sinal_compra(precos, ticker, k_loss)["ativo"].to_numpy()
+    ativo = sinal_compra(precos, ticker)["ativo"].to_numpy()
     mu, sd = bandas_moveis(s)
     teto = (mu + k_gain * sd).to_numpy()
     piso = (mu + k_loss * sd).to_numpy()
@@ -238,14 +240,13 @@ def status_operacao(precos, ticker, k_gain=K_STOP_GAIN, k_loss=K_STOP_LOSS):
 
     faltam = []
     if not aberta:
-        hoje = sinal_compra(precos, ticker, k_loss).iloc[-1]
+        hoje = sinal_compra(precos, ticker).iloc[-1]
         if not hoje["difusor"]:
             faltam.append("difusor short > long")
         if not hoje["mma"]:
             faltam.append(f"MMA{MMA_RAPIDA} > MMA{MMA_LENTA}")
         if not hoje["preco"]:
-            faixa = f"entre {k_loss:+g}σ e +{K_SIGMA:g}σ".replace(".", ",").replace("-", "−")
-            faltam.append(f"preço {faixa}")
+            faltam.append(f"preço abaixo de +{K_SIGMA:g}σ".replace(".", ","))
     return {
         "aberta":    aberta,
         "op":        op,
