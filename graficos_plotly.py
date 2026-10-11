@@ -19,7 +19,7 @@ CORES_MPL = {"k": "black", "r": "red", "b": "blue", "g": "green", "y": "goldenro
 CORES_ANOS = ["#0173B2", "#029E73", "#DE8F05"]   # ano −3, −2, −1
 
 # Espessura das médias móveis no app (padrão 1.2 para as não listadas)
-ESPESSURA_MMA = {84: 1.8, 63: 1.5}   # laranja e rosa
+ESPESSURA_MMA = {200: 2.0, 84: 1.8, 63: 1.5}   # laranja e rosa
 
 # Toque/arrasto dá zoom; duplo toque volta ao enquadramento original
 CONFIG = {
