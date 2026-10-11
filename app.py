@@ -7,7 +7,7 @@ Deploy:  Streamlit Community Cloud apontando para este arquivo.
 import pandas as pd
 import streamlit as st
 
-from analise_ativos import (DIAS_UTEIS_ANO, JANELA_PLOT, MMA_LENTA, MMA_RAPIDA,
+from analise_ativos import (DIAS_UTEIS_ANO, JANELA_PLOT, K_SIGMA, MMA_LENTA, MMA_RAPIDA,
                             NAO_ACOES, TICKERS, baixar_precos, moeda, serie,
                             status_sinal, tabela_painel, tabela_resumo)
 from graficos_plotly import aplicar_zoom, config_zoom, fig_ativo, fig_hist
@@ -86,7 +86,7 @@ with aba_ativo:
               help="Distância do preço atual à média dos últimos 248 pregões, "
                    "em desvios-padrão (mesma referência das bandas do gráfico)")
 
-    # Sinal de compra: difusor short > long  E  MMA63 > MMA84
+    # Sinal de compra: difusor short > long  E  MMA63 > MMA84  E  preço < média + 1σ
     sinal = status_sinal(precos, ticker)
     if sinal["ativo"]:
         dias_txt = "começou hoje" if sinal["dias"] == 1 else f"há {sinal['dias']} pregões"
@@ -115,7 +115,8 @@ with aba_ativo:
 # ----------------------------------------------------------------------------
 with aba_painel:
     painel = tabela_painel(precos, dias=JANELA_PLOT)
-    st.caption(f"Sinal: difusor short > long e MMA{MMA_RAPIDA} > MMA{MMA_LENTA}. "
+    st.caption(f"Sinal: difusor short > long, MMA{MMA_RAPIDA} > MMA{MMA_LENTA} e "
+               f"preço abaixo de média + {K_SIGMA:g}σ. "
                f"Faixa, média e σ dos últimos {JANELA_PLOT} pregões. "
                "Toque no nome de uma coluna para ordenar.")
     st.dataframe(
