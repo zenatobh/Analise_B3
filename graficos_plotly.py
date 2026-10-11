@@ -13,21 +13,24 @@ from plotly.subplots import make_subplots
 from analise_ativos import (BANDAS, EMA_FAST, EMA_LONG, EMA_SLOW,
                             JANELA_PLOT, MMAS, difusor, mma, moeda, serie)
 
-# Cores equivalentes às do matplotlib ("seaborn-v0_8-colorblind" e nomes curtos)
+# Cores equivalentes às do matplotlib ("seaborn-v0_8-colorblind")
 COR_PRECO = "#0173B2"
-CORES_MPL = {"k": "black", "r": "red", "b": "blue", "g": "green", "y": "goldenrod"}
 CORES_ANOS = ["#0173B2", "#029E73", "#DE8F05"]   # ano −3, −2, −1
 
 # Espessura das médias móveis no app (padrão 1.2 para as não listadas)
-ESPESSURA_MMA = {200: 2.0, 84: 1.8, 63: 1.5}   # laranja e rosa
+ESPESSURA_MMA = {200: 2.0, 84: 1.8, 63: 1.5}
 
-# Toque/arrasto dá zoom; duplo toque volta ao enquadramento original
+# Arrasto dá zoom; toque duplo volta ao enquadramento original.
+# Barra de ferramentas oculta: no celular ela cobria a legenda.
 CONFIG = {
     "scrollZoom": True,
-    "displaylogo": False,
-    "modeBarButtonsToRemove": ["select2d", "lasso2d", "autoScale2d"],
+    "displayModeBar": False,
     "locale": "pt-BR",
 }
+
+# Cinzas com transparência: legíveis tanto no tema claro quanto no escuro
+CINZA_FORTE = "rgba(128,128,128,0.85)"
+CINZA_FRACO = "rgba(128,128,128,0.40)"
 
 _LAYOUT_BASE = dict(
     template="plotly_white",
@@ -41,10 +44,6 @@ _LAYOUT_BASE = dict(
 )
 
 
-def _cor(c):
-    return CORES_MPL.get(c, c)
-
-
 def fig_ativo(precos, ticker, period=JANELA_PLOT, percentual=False, altura=620):
     """Preço + MMAs + bandas média ± k·desvio (painel 1) e difusor (painel 2)."""
     s_full = serie(precos, ticker)
@@ -55,21 +54,29 @@ def fig_ativo(precos, ticker, period=JANELA_PLOT, percentual=False, altura=620):
                         row_heights=[0.72, 0.28], vertical_spacing=0.04)
 
     # Painel 1 — preço e médias móveis (calculadas na série cheia)
-    fig.add_trace(go.Scatter(x=s.index, y=s, name="Fechamento",
+    fig.add_trace(go.Scatter(x=s.index, y=s, name="Preço",
                              line=dict(color=COR_PRECO, width=1.8)), row=1, col=1)
     for janela, cor in MMAS:
         m = mma(s_full, janela).tail(period)
-        fig.add_trace(go.Scatter(x=m.index, y=m, name=f"MMA {janela}",
+        fig.add_trace(go.Scatter(x=m.index, y=m, name=f"MMA{janela}",
                                  line=dict(color=cor, width=ESPESSURA_MMA.get(janela, 1.2))),
                       row=1, col=1)
 
-    # Bandas estáticas da janela
-    fig.add_hline(y=media, line=dict(color="blue", dash="dashdot", width=1.4), row=1, col=1)
+    # Bandas estáticas da janela: faixa ±1σ sombreada, linhas suaves e rótulos à direita
+    fig.add_hrect(y0=media - std, y1=media + std, fillcolor="rgba(1,115,178,0.07)",
+                  line_width=0, layer="below", row=1, col=1)
+    _rotulo = dict(annotation_position="top right",
+                   annotation_font=dict(size=9, color=CINZA_FORTE))
+    fig.add_hline(y=media, line=dict(color="rgba(0,0,255,0.55)", dash="dashdot", width=1.2),
+                  annotation_text="μ", row=1, col=1, **_rotulo)
     for k, cor, lw in BANDAS:
-        fig.add_hline(y=media + k * std, line=dict(color=_cor(cor or "darkgreen"),
-                      dash="dashdot", width=lw), row=1, col=1)
-        fig.add_hline(y=media - k * std, line=dict(color=_cor(cor or "r"),
-                      dash="dashdot", width=lw), row=1, col=1)
+        rotular = float(k).is_integer()                 # rótulo só em ±1σ e ±2σ
+        for sinal, cor_padrao in ((+1, "rgba(0,100,0,0.6)"), (-1, "rgba(220,0,0,0.6)")):
+            fig.add_hline(
+                y=media + sinal * k * std,
+                line=dict(color=CINZA_FRACO if cor else cor_padrao, dash="dashdot", width=lw),
+                annotation_text=f"{'+' if sinal > 0 else '−'}{k:g}σ" if rotular else None,
+                row=1, col=1, **(_rotulo if rotular else {}))
 
     # Painel 2 — difusor
     dif = difusor(precos, ticker, period, percentual)
@@ -77,9 +84,16 @@ def fig_ativo(precos, ticker, period=JANELA_PLOT, percentual=False, altura=620):
         ("long",   f"Long ({EMA_LONG})",               "rgba(128,128,128,0.94)", 3),
         ("short",  f"Short ({EMA_FAST}-{EMA_SLOW})",   "red",                    2),
     ]:
-        fig.add_trace(go.Scatter(x=dif.index, y=dif[col], name=nome,
-                                 line=dict(color=cor, width=lw)), row=2, col=1)
-    fig.add_hline(y=0, line=dict(color="black", width=0.6), row=2, col=1)
+        fig.add_trace(go.Scatter(x=dif.index, y=dif[col], name=nome.split(" ")[0],
+                                 showlegend=False, line=dict(color=cor, width=lw)),
+                      row=2, col=1)
+    fig.add_hline(y=0, line=dict(color=CINZA_FORTE, width=0.6), row=2, col=1)
+    # Legenda do difusor dentro do próprio painel (não ocupa linha na legenda principal)
+    fig.add_annotation(
+        text=(f"<span style='color:red'>━ Short {EMA_FAST}-{EMA_SLOW}</span>   "
+              f"<span style='color:rgb(128,128,128)'>━ Long {EMA_LONG}</span>"),
+        xref="x2 domain", yref="y2 domain", x=0.01, y=0.98,
+        xanchor="left", yanchor="top", showarrow=False, font=dict(size=9))
 
     fig.update_layout(
         **_LAYOUT_BASE,
