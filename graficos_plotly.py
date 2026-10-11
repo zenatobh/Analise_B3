@@ -20,13 +20,29 @@ CORES_ANOS = ["#0173B2", "#029E73", "#DE8F05"]   # ano −3, −2, −1
 # Espessura das médias móveis no app (padrão 1.2 para as não listadas)
 ESPESSURA_MMA = {200: 2.0, 84: 1.8, 63: 1.5}
 
-# Arrasto dá zoom; toque duplo volta ao enquadramento original.
 # Barra de ferramentas oculta: no celular ela cobria a legenda.
 CONFIG = {
     "scrollZoom": True,
     "displayModeBar": False,
     "locale": "pt-BR",
 }
+
+
+def config_zoom(ativo):
+    """Config do Plotly: com zoom, arrasto amplia e toque duplo volta; sem zoom, nada muda."""
+    return {**CONFIG, "scrollZoom": ativo, "doubleClick": "reset+autosize" if ativo else False}
+
+
+def aplicar_zoom(fig, ativo):
+    """
+    Trava (ativo=False) ou libera o zoom da figura. Travada, um dedo não altera o
+    gráfico — a página rola normalmente e o toque ainda mostra os valores; a pinça
+    com dois dedos amplia a página inteira pelo navegador (o gráfico é vetorial).
+    """
+    fig.update_layout(dragmode="zoom" if ativo else False)
+    fig.update_xaxes(fixedrange=not ativo)
+    fig.update_yaxes(fixedrange=not ativo)
+    return fig
 
 # Cinzas com transparência: legíveis tanto no tema claro quanto no escuro
 CINZA_FORTE = "rgba(128,128,128,0.85)"
