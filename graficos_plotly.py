@@ -11,8 +11,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from analise_ativos import (BANDAS, EMA_FAST, EMA_LONG, EMA_SLOW,
-                            JANELA_PLOT, MMAS, difusor, mma, moeda, serie,
-                            sinal_compra)
+                            JANELA_PLOT, K_STOP_GAIN, K_STOP_LOSS, MMAS, difusor,
+                            mma, moeda, operacoes, serie, status_operacao)
 
 # Cores equivalentes às do matplotlib ("seaborn-v0_8-colorblind")
 COR_PRECO = "#0173B2"
@@ -53,10 +53,8 @@ COR_MARCA_SINAL = "#1a9850"
 MEIO_DIA = pd.Timedelta(hours=12)
 
 
-def _periodos_ativos(flag):
-    """Lista de (início, fim) das sequências contínuas de True numa série booleana."""
-    grupos = (flag != flag.shift()).cumsum()
-    return [(g.index[0], g.index[-1]) for _, g in flag[flag].groupby(grupos[flag])]
+COR_GAIN = "#1a9850"
+COR_LOSS = "#d73027"
 
 _LAYOUT_BASE = dict(
     template="plotly_white",
@@ -70,7 +68,8 @@ _LAYOUT_BASE = dict(
 )
 
 
-def fig_ativo(precos, ticker, period=JANELA_PLOT, altura=620):
+def fig_ativo(precos, ticker, period=JANELA_PLOT, altura=620,
+              k_gain=K_STOP_GAIN, k_loss=K_STOP_LOSS):
     """Preço + MMAs + bandas média ± k·desvio (painel 1) e difusor (painel 2)."""
     s_full = serie(precos, ticker)
     s = s_full.tail(period)
@@ -88,23 +87,41 @@ def fig_ativo(precos, ticker, period=JANELA_PLOT, altura=620):
                                  line=dict(color=cor, width=ESPESSURA_MMA.get(janela, 1.2))),
                       row=1, col=1)
 
-    # Sinal de compra: faixa verde nos períodos ativos e ▲ no dia em que começou
-    sc = sinal_compra(precos, ticker)
-    ativo = sc["ativo"].loc[s.index[0]:]
-    inicios = []
-    for ini, fim in _periodos_ativos(ativo):
-        # Meio dia para cada lado: um sinal de 1 pregão também aparece (largura > 0)
-        fig.add_vrect(x0=ini - MEIO_DIA, x1=fim + MEIO_DIA, fillcolor=VERDE_SINAL,
-                      line_width=0, layer="below", row="all", col=1)
-        # Só marca o início se ele está dentro da janela (não é continuação de antes)
-        if not (ini == s.index[0] and sc["ativo"].shift(fill_value=False).loc[ini]):
-            inicios.append(ini)
-    if inicios:
-        fig.add_trace(go.Scatter(x=inicios, y=s.loc[inicios], mode="markers", name="Início do sinal",
-                                 marker=dict(symbol="triangle-up", size=11,
-                                             color=COR_MARCA_SINAL,
-                                             line=dict(color="white", width=1))),
-                      row=1, col=1)
+    # Operações: faixa verde da entrada à saída, ▲ na entrada, ▼ na saída
+    # (verde = stop gain, vermelho = stop loss)
+    ops = operacoes(precos, ticker, k_gain, k_loss)
+    ini_janela, fim_janela = s.index[0], s.index[-1]
+    entradas, saidas = [], {"gain": [], "loss": []}
+    for _, op in ops.iterrows():
+        fim_op = op["saida"] if pd.notna(op["saida"]) else fim_janela
+        if fim_op < ini_janela:
+            continue
+        # Meio dia para cada lado: uma operação de 1 pregão também aparece (largura > 0)
+        fig.add_vrect(x0=max(op["entrada"], ini_janela) - MEIO_DIA, x1=fim_op + MEIO_DIA,
+                      fillcolor=VERDE_SINAL, line_width=0, layer="below", row="all", col=1)
+        if op["entrada"] >= ini_janela:
+            entradas.append(op["entrada"])
+        if pd.notna(op["saida"]):
+            saidas[op["motivo"]].append(op["saida"])
+
+    def _marcas(datas, nome, simbolo, cor):
+        if datas:
+            fig.add_trace(go.Scatter(x=datas, y=s_full.loc[datas], mode="markers", name=nome,
+                                     marker=dict(symbol=simbolo, size=11, color=cor,
+                                                 line=dict(color="white", width=1))),
+                          row=1, col=1)
+    _marcas(entradas, "Entrada", "triangle-up", COR_MARCA_SINAL)
+    _marcas(saidas["gain"], "Stop gain", "triangle-down", COR_GAIN)
+    _marcas(saidas["loss"], "Stop loss", "triangle-down", COR_LOSS)
+
+    # Operação aberta: níveis atuais de stop gain e stop loss
+    st_op = status_operacao(precos, ticker, k_gain, k_loss)
+    if st_op["aberta"]:
+        for nivel, cor, texto in ((st_op["stop_gain"], COR_GAIN, "stop gain"),
+                                  (st_op["stop_loss"], COR_LOSS, "stop loss")):
+            fig.add_hline(y=nivel, line=dict(color=cor, dash="dot", width=1.6),
+                          annotation_text=texto, annotation_position="bottom right",
+                          annotation_font=dict(size=9, color=cor), row=1, col=1)
 
     # Bandas estáticas da janela: faixa ±1σ sombreada, linhas suaves e rótulos à direita
     fig.add_hrect(y0=media - std, y1=media + std, fillcolor="rgba(1,115,178,0.07)",
