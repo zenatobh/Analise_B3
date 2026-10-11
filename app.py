@@ -103,7 +103,7 @@ with aba_ativo:
         k_loss = st.select_slider("Stop loss (abaixo da média)", [-2.0, -1.5, -1.0, -0.5],
                                   value=float(K_STOP_LOSS), format_func=sigma,
                                   help="Sai com perda quando o fechamento cai abaixo desta "
-                                       "banda. Também é o piso para a entrada.")
+                                       "banda")
         zoom = st.toggle("Zoom no gráfico", value=False,
                          help="Ligado: arraste para ampliar uma região e toque duas vezes "
                               "para voltar. Desligado: o gráfico não muda ao tocar.")
@@ -139,7 +139,7 @@ with aba_ativo:
 with aba_painel:
     painel = tabela_painel(precos, dias=JANELA_PLOT, k_gain=k_gain, k_loss=k_loss)
     st.caption(f"Entrada: difusor short > long, MMA{MMA_RAPIDA} > MMA{MMA_LENTA} e "
-               f"preço entre {sigma(k_loss)} e {sigma(K_SIGMA)}. Saída: stop gain "
+               f"preço abaixo de {sigma(K_SIGMA)}. Saída: stop gain "
                f"{sigma(k_gain)} ou stop loss {sigma(k_loss)}. "
                f"Faixa, média e σ dos últimos {JANELA_PLOT} pregões. "
                "Toque no nome de uma coluna para ordenar.")
