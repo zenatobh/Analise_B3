@@ -50,6 +50,7 @@ CINZA_FORTE = "rgba(128,128,128,0.85)"
 CINZA_FRACO = "rgba(128,128,128,0.40)"
 VERDE_SINAL = "rgba(26,152,80,0.13)"
 COR_MARCA_SINAL = "#1a9850"
+MEIO_DIA = pd.Timedelta(hours=12)
 
 
 def _periodos_ativos(flag):
@@ -92,13 +93,14 @@ def fig_ativo(precos, ticker, period=JANELA_PLOT, altura=620):
     ativo = sc["ativo"].loc[s.index[0]:]
     inicios = []
     for ini, fim in _periodos_ativos(ativo):
-        fig.add_vrect(x0=ini, x1=fim, fillcolor=VERDE_SINAL, line_width=0,
-                      layer="below", row="all", col=1)
+        # Meio dia para cada lado: um sinal de 1 pregão também aparece (largura > 0)
+        fig.add_vrect(x0=ini - MEIO_DIA, x1=fim + MEIO_DIA, fillcolor=VERDE_SINAL,
+                      line_width=0, layer="below", row="all", col=1)
         # Só marca o início se ele está dentro da janela (não é continuação de antes)
         if not (ini == s.index[0] and sc["ativo"].shift(fill_value=False).loc[ini]):
             inicios.append(ini)
     if inicios:
-        fig.add_trace(go.Scatter(x=inicios, y=s.loc[inicios], mode="markers", name="▲ Sinal",
+        fig.add_trace(go.Scatter(x=inicios, y=s.loc[inicios], mode="markers", name="Início do sinal",
                                  marker=dict(symbol="triangle-up", size=11,
                                              color=COR_MARCA_SINAL,
                                              line=dict(color="white", width=1))),
@@ -117,8 +119,10 @@ def fig_ativo(precos, ticker, period=JANELA_PLOT, altura=620):
             fig.add_hline(
                 y=media + sinal * k * std,
                 line=dict(color=CINZA_FRACO if cor else cor_padrao, dash="dashdot", width=lw),
-                annotation_text=f"{'+' if sinal > 0 else '−'}{k:g}σ" if rotular else None,
-                row=1, col=1, **(_rotulo if rotular else {}))
+                row=1, col=1,
+                # Só passa o rótulo quando existe: annotation_text=None vira "new text"
+                **({"annotation_text": f"{'+' if sinal > 0 else '−'}{k:g}σ", **_rotulo}
+                   if rotular else {}))
 
     # Painel 2 — difusor
     dif = difusor(precos, ticker, period)
