@@ -10,7 +10,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from analise_ativos import (BANDAS, EMA_FAST, EMA_LONG, EMA_MEDIUM, EMA_SLOW,
+from analise_ativos import (BANDAS, EMA_FAST, EMA_LONG, EMA_SLOW,
                             JANELA_PLOT, MMAS, difusor, mma, moeda, serie)
 
 # Cores equivalentes às do matplotlib ("seaborn-v0_8-colorblind" e nomes curtos)
@@ -71,7 +71,6 @@ def fig_ativo(precos, ticker, period=JANELA_PLOT, percentual=False, altura=620):
     dif = difusor(precos, ticker, period, percentual)
     for col, nome, cor, lw in [
         ("long",   f"Long ({EMA_LONG})",               "rgba(128,128,128,0.94)", 3),
-        ("medium", f"Medium ({EMA_MEDIUM})",           "#1f77b4",                1),
         ("short",  f"Short ({EMA_FAST}-{EMA_SLOW})",   "red",                    2),
     ]:
         fig.add_trace(go.Scatter(x=dif.index, y=dif[col], name=nome,
