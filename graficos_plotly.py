@@ -18,6 +18,9 @@ COR_PRECO = "#0173B2"
 CORES_MPL = {"k": "black", "r": "red", "b": "blue", "g": "green", "y": "goldenrod"}
 CORES_ANOS = ["#0173B2", "#029E73", "#DE8F05"]   # ano −3, −2, −1
 
+# Espessura das médias móveis no app (padrão 1.2 para as não listadas)
+ESPESSURA_MMA = {84: 1.8, 63: 1.5}   # laranja e rosa
+
 # Toque/arrasto dá zoom; duplo toque volta ao enquadramento original
 CONFIG = {
     "scrollZoom": True,
@@ -57,7 +60,8 @@ def fig_ativo(precos, ticker, period=JANELA_PLOT, percentual=False, altura=620):
     for janela, cor in MMAS:
         m = mma(s_full, janela).tail(period)
         fig.add_trace(go.Scatter(x=m.index, y=m, name=f"MMA {janela}",
-                                 line=dict(color=cor, width=1.2)), row=1, col=1)
+                                 line=dict(color=cor, width=ESPESSURA_MMA.get(janela, 1.2))),
+                      row=1, col=1)
 
     # Bandas estáticas da janela
     fig.add_hline(y=media, line=dict(color="blue", dash="dashdot", width=1.4), row=1, col=1)
