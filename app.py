@@ -83,4 +83,4 @@ with aba_resumo:
 
     resumo = tabela_resumo(precos, dias=int(dias), excluir=excluir)
     # Transposta: uma linha por ação cabe melhor na largura do celular
-    st.dataframe(resumo.T, width="stretch")
+    st.dataframe(resumo, width="stretch")
