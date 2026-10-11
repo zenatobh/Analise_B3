@@ -10,7 +10,7 @@ import streamlit as st
 from analise_ativos import (DIAS_UTEIS_ANO, JANELA_PLOT, NAO_ACOES, TICKERS,
                             baixar_precos, moeda, serie, tabela_painel,
                             tabela_resumo)
-from graficos_plotly import CONFIG, fig_ativo, fig_hist
+from graficos_plotly import aplicar_zoom, config_zoom, fig_ativo, fig_hist
 
 st.set_page_config(page_title="Ativos B3", page_icon="📈", layout="centered")
 
@@ -25,8 +25,8 @@ def carregar():
     return baixar_precos(TICKERS)
 
 
-def mostrar_fig(fig):
-    st.plotly_chart(fig, width="stretch", config=CONFIG)
+def mostrar_fig(fig, zoom=False):
+    st.plotly_chart(aplicar_zoom(fig, zoom), width="stretch", config=config_zoom(zoom))
 
 
 def pct(x, casas=2):
@@ -92,10 +92,15 @@ with aba_ativo:
 
     with st.expander("Opções"):
         percentual = st.toggle("Difusor em %", value=False)
+        zoom = st.toggle("Zoom no gráfico", value=False,
+                         help="Ligado: arraste para ampliar uma região e toque duas vezes "
+                              "para voltar. Desligado: o gráfico não muda ao tocar.")
 
-    mostrar_fig(fig_ativo(precos, ticker, period=periodo, percentual=percentual))
-    st.caption("Arraste sobre o gráfico para dar zoom · toque duplo para voltar.")
-    mostrar_fig(fig_hist(precos, ticker))
+    mostrar_fig(fig_ativo(precos, ticker, period=periodo, percentual=percentual), zoom)
+    st.caption("Arraste sobre o gráfico para dar zoom · toque duplo para voltar."
+               if zoom else
+               "Toque para ver os valores · use dois dedos para ampliar a tela.")
+    mostrar_fig(fig_hist(precos, ticker), zoom)
 
 # ----------------------------------------------------------------------------
 # Aba 2 — visão geral de todos os ativos
