@@ -11,7 +11,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from analise_ativos import (BANDAS, EMA_FAST, EMA_LONG, EMA_SLOW,
-                            JANELA_PLOT, MMAS, difusor, mma, moeda, serie)
+                            JANELA_PLOT, MMAS, difusor, mma, moeda, serie,
+                            sinal_compra)
 
 # Cores equivalentes às do matplotlib ("seaborn-v0_8-colorblind")
 COR_PRECO = "#0173B2"
@@ -47,6 +48,14 @@ def aplicar_zoom(fig, ativo):
 # Cinzas com transparência: legíveis tanto no tema claro quanto no escuro
 CINZA_FORTE = "rgba(128,128,128,0.85)"
 CINZA_FRACO = "rgba(128,128,128,0.40)"
+VERDE_SINAL = "rgba(26,152,80,0.13)"
+COR_MARCA_SINAL = "#1a9850"
+
+
+def _periodos_ativos(flag):
+    """Lista de (início, fim) das sequências contínuas de True numa série booleana."""
+    grupos = (flag != flag.shift()).cumsum()
+    return [(g.index[0], g.index[-1]) for _, g in flag[flag].groupby(grupos[flag])]
 
 _LAYOUT_BASE = dict(
     template="plotly_white",
@@ -60,7 +69,7 @@ _LAYOUT_BASE = dict(
 )
 
 
-def fig_ativo(precos, ticker, period=JANELA_PLOT, percentual=False, altura=620):
+def fig_ativo(precos, ticker, period=JANELA_PLOT, altura=620):
     """Preço + MMAs + bandas média ± k·desvio (painel 1) e difusor (painel 2)."""
     s_full = serie(precos, ticker)
     s = s_full.tail(period)
@@ -76,6 +85,23 @@ def fig_ativo(precos, ticker, period=JANELA_PLOT, percentual=False, altura=620):
         m = mma(s_full, janela).tail(period)
         fig.add_trace(go.Scatter(x=m.index, y=m, name=f"MMA{janela}",
                                  line=dict(color=cor, width=ESPESSURA_MMA.get(janela, 1.2))),
+                      row=1, col=1)
+
+    # Sinal de compra: faixa verde nos períodos ativos e ▲ no dia em que começou
+    sc = sinal_compra(precos, ticker)
+    ativo = sc["ativo"].loc[s.index[0]:]
+    inicios = []
+    for ini, fim in _periodos_ativos(ativo):
+        fig.add_vrect(x0=ini, x1=fim, fillcolor=VERDE_SINAL, line_width=0,
+                      layer="below", row="all", col=1)
+        # Só marca o início se ele está dentro da janela (não é continuação de antes)
+        if not (ini == s.index[0] and sc["ativo"].shift(fill_value=False).loc[ini]):
+            inicios.append(ini)
+    if inicios:
+        fig.add_trace(go.Scatter(x=inicios, y=s.loc[inicios], mode="markers", name="▲ Sinal",
+                                 marker=dict(symbol="triangle-up", size=11,
+                                             color=COR_MARCA_SINAL,
+                                             line=dict(color="white", width=1))),
                       row=1, col=1)
 
     # Bandas estáticas da janela: faixa ±1σ sombreada, linhas suaves e rótulos à direita
@@ -95,7 +121,7 @@ def fig_ativo(precos, ticker, period=JANELA_PLOT, percentual=False, altura=620):
                 row=1, col=1, **(_rotulo if rotular else {}))
 
     # Painel 2 — difusor
-    dif = difusor(precos, ticker, period, percentual)
+    dif = difusor(precos, ticker, period)
     for col, nome, cor, lw in [
         ("long",   f"Long ({EMA_LONG})",               "rgba(128,128,128,0.94)", 3),
         ("short",  f"Short ({EMA_FAST}-{EMA_SLOW})",   "red",                    2),
@@ -123,7 +149,7 @@ def fig_ativo(precos, ticker, period=JANELA_PLOT, percentual=False, altura=620):
     fig.update_xaxes(showgrid=False)
     fig.update_yaxes(showgrid=False, tickformat=",.2f", row=1, col=1)
     fig.update_yaxes(showgrid=False, tickformat=",.2f",
-                     ticksuffix="%" if percentual else "", row=2, col=1)
+                     row=2, col=1)
     fig.update_traces(hovertemplate="%{y:,.2f}")
     # Título em cima, legenda logo abaixo dele (cabe melhor na largura do celular)
     fig.update_layout(margin=dict(t=95), legend=dict(y=1.02))
