@@ -41,10 +41,14 @@ BANDAS = [  # (multiplicador do desvio, cor, espessura); None = verde acima / ve
 
 EMA_FAST, EMA_SLOW, EMA_MEDIUM, EMA_LONG = 21, 55, 34, 89
 
-# Sinal de compra: difusor short > long  E  MMA rápida > MMA lenta
-#                  E  preço abaixo de média + K_SIGMA·σ (janela móvel de JANELA_PLOT pregões)
+# Operação (bandas móveis de JANELA_PLOT pregões: média μ e desvio σ até cada dia)
+#   Entrada:    difusor short > long  E  MMA63 > MMA84  E  μ + K_STOP_LOSS·σ < preço < μ + K_SIGMA·σ
+#   Stop gain:  fechamento acima de μ + K_STOP_GAIN·σ
+#   Stop loss:  fechamento abaixo de μ + K_STOP_LOSS·σ
 MMA_RAPIDA, MMA_LENTA = 63, 84
-K_SIGMA = 1
+K_SIGMA = 1          # teto da entrada (+1σ)
+K_STOP_GAIN = 2      # +2σ
+K_STOP_LOSS = -1     # −1σ (também é o piso da entrada)
 
 plt.style.use("seaborn-v0_8-colorblind")
 
@@ -95,10 +99,10 @@ def tabela_resumo(precos, dias=JANELA_PLOT * 2, excluir=NAO_ACOES):
     return precos[cols].tail(dias).describe().round(2)
 
 
-def tabela_painel(precos, dias=JANELA_PLOT):
+def tabela_painel(precos, dias=JANELA_PLOT, k_gain=K_STOP_GAIN, k_loss=K_STOP_LOSS):
     """
     Visão geral de todos os ativos nos últimos `dias` pregões de cada um:
-    sinal de compra (e há quantos pregões), último preço, variação no dia e em
+    operação aberta (há quantos pregões e resultado até agora), último preço, variação no dia e em
     12 meses, posição do preço na faixa
     mín–máx do período (0 = na mínima, 1 = na máxima) e distância da média em σ.
     """
@@ -107,10 +111,12 @@ def tabela_painel(precos, dias=JANELA_PLOT):
         s = serie(precos, ticker)
         j = s.tail(dias)
         ultimo, minimo, maximo = j.iloc[-1], j.min(), j.max()
-        st_sinal = status_sinal(precos, ticker)
+        st_op = status_operacao(precos, ticker, k_gain, k_loss)
+        aberta = st_op["aberta"]
         linhas[ticker] = {
-            "Sinal":    st_sinal["ativo"],
-            "Há":       st_sinal["dias"],
+            "Comprado": aberta,
+            "Há":       st_op["op"]["dias"] if aberta else None,
+            "Result.":  st_op["op"]["resultado"] if aberta else np.nan,
             "Último":   ultimo,
             "Dia":      ultimo / s.iloc[-2] - 1 if len(s) > 1 else np.nan,
             "12 meses": ultimo / s.iloc[-min(len(s), DIAS_UTEIS_ANO)] - 1,
@@ -142,51 +148,111 @@ def difusor(precos, ticker, period=DIAS_UTEIS_ANO):
     }).tail(period)
 
 
-def sinal_compra(precos, ticker):
+def bandas_moveis(s):
+    """Média e desvio móveis de JANELA_PLOT pregões (a partir de MMA_LENTA no início da série)."""
+    janela = s.rolling(JANELA_PLOT, min_periods=MMA_LENTA)
+    return janela.mean(), janela.std()
+
+
+def sinal_compra(precos, ticker, k_loss=K_STOP_LOSS):
     """
-    Sinal de compra dia a dia (série completa do ativo):
+    Condições de entrada dia a dia (série completa do ativo):
       difusor  — short (EMA21−EMA55) acima do long (EMA89 do short)
       mma      — MMA63 acima da MMA84
-      preco    — preço abaixo de média + 1σ dos últimos 248 pregões (até aquele dia,
-                 sem olhar o futuro; no último pregão é a mesma banda do gráfico em 1A)
+      preco    — preço entre μ + k_loss·σ e μ + 1σ (bandas móveis, sem olhar o futuro;
+                 no último pregão são as mesmas bandas do gráfico em 1A)
       ativo    — as três condições ao mesmo tempo
     Dias sem MMA84 calculada (início da série) contam como False.
     """
     s = serie(precos, ticker)
     dif = difusor(precos, ticker, period=len(s))
-    # Janela móvel; no início da série aceita a partir de MMA_LENTA pregões
-    janela = s.rolling(JANELA_PLOT, min_periods=MMA_LENTA)
-    teto = janela.mean() + K_SIGMA * janela.std()
+    mu, sd = bandas_moveis(s)
     return pd.DataFrame({
         "difusor": dif["short"] > dif["long"],
         "mma":     mma(s, MMA_RAPIDA) > mma(s, MMA_LENTA),
-        "preco":   s < teto,
+        "preco":   (s > mu + k_loss * sd) & (s < mu + K_SIGMA * sd),
     }).assign(ativo=lambda d: d["difusor"] & d["mma"] & d["preco"])
 
 
-def status_sinal(precos, ticker):
+def operacoes(precos, ticker, k_gain=K_STOP_GAIN, k_loss=K_STOP_LOSS):
     """
-    Situação do sinal no último pregão:
-      ativo   — bool
-      dias    — há quantos pregões o sinal está ativo (1 = começou hoje); None se inativo
-      inicio  — data em que o sinal atual começou; None se inativo
-      faltam  — condições não atendidas hoje (lista de textos)
+    Simula as operações pelos fechamentos:
+      - entra no fechamento do primeiro dia com sinal ativo, se não houver operação aberta;
+      - a partir do pregão seguinte, sai no primeiro fechamento acima de μ + k_gain·σ
+        (stop gain) ou abaixo de μ + k_loss·σ (stop loss);
+      - enquanto a operação está aberta, o sinal de entrada é ignorado (pode ligar e
+        desligar sem efeito).
+    Retorna um DataFrame com uma linha por operação: entrada, preco_entrada, saida,
+    preco_saida, motivo ("gain", "loss" ou None se aberta), resultado (fração) e dias.
     """
-    sc = sinal_compra(precos, ticker)
-    hoje = sc.iloc[-1]
+    s = serie(precos, ticker)
+    ativo = sinal_compra(precos, ticker, k_loss)["ativo"].to_numpy()
+    mu, sd = bandas_moveis(s)
+    teto = (mu + k_gain * sd).to_numpy()
+    piso = (mu + k_loss * sd).to_numpy()
+    p, idx = s.to_numpy(), s.index
+
+    ops, aberta = [], None
+    for i in range(len(p)):
+        if aberta is None:
+            if ativo[i]:
+                aberta = i
+            continue
+        motivo = "gain" if p[i] > teto[i] else "loss" if p[i] < piso[i] else None
+        if motivo:
+            ops.append((aberta, i, motivo))
+            aberta = None
+    if aberta is not None:
+        ops.append((aberta, None, None))
+
+    linhas = []
+    for e, x, motivo in ops:
+        fim = x if x is not None else len(p) - 1
+        linhas.append({
+            "entrada":       idx[e],
+            "preco_entrada": p[e],
+            "saida":         idx[x] if x is not None else pd.NaT,
+            "preco_saida":   p[x] if x is not None else np.nan,
+            "motivo":        motivo,                 # None = operação aberta
+            "resultado":     p[fim] / p[e] - 1,      # aberta: resultado até o último fechamento
+            "dias":          fim - e + 1,            # pregões, contando a entrada
+        })
+    return pd.DataFrame(linhas, columns=["entrada", "preco_entrada", "saida", "preco_saida",
+                                         "motivo", "resultado", "dias"])
+
+
+def status_operacao(precos, ticker, k_gain=K_STOP_GAIN, k_loss=K_STOP_LOSS):
+    """
+    Situação no último pregão:
+      aberta     — bool (operação em andamento, inclusive se entrou hoje)
+      op         — a operação aberta (Series) ou a última fechada (ou None se nunca houve)
+      stop_gain  — nível atual de μ + k_gain·σ
+      stop_loss  — nível atual de μ + k_loss·σ
+      faltam     — se não há operação aberta: condições de entrada não atendidas hoje
+    """
+    s = serie(precos, ticker)
+    mu, sd = bandas_moveis(s)
+    ops = operacoes(precos, ticker, k_gain, k_loss)
+    op = ops.iloc[-1] if len(ops) else None
+    aberta = op is not None and pd.isna(op["saida"])
+
     faltam = []
-    if not hoje["difusor"]:
-        faltam.append("difusor short > long")
-    if not hoje["mma"]:
-        faltam.append(f"MMA{MMA_RAPIDA} > MMA{MMA_LENTA}")
-    if not hoje["preco"]:
-        faltam.append(f"preço abaixo de média + {K_SIGMA:g}σ")
-    if not hoje["ativo"]:
-        return {"ativo": False, "dias": None, "inicio": None, "faltam": faltam}
-    # Comprimento da sequência final de dias ativos
-    inativos = sc.index[~sc["ativo"]]
-    corrida = sc.loc[sc.index > inativos[-1]] if len(inativos) else sc
-    return {"ativo": True, "dias": len(corrida), "inicio": corrida.index[0], "faltam": []}
+    if not aberta:
+        hoje = sinal_compra(precos, ticker, k_loss).iloc[-1]
+        if not hoje["difusor"]:
+            faltam.append("difusor short > long")
+        if not hoje["mma"]:
+            faltam.append(f"MMA{MMA_RAPIDA} > MMA{MMA_LENTA}")
+        if not hoje["preco"]:
+            faixa = f"entre {k_loss:+g}σ e +{K_SIGMA:g}σ".replace(".", ",").replace("-", "−")
+            faltam.append(f"preço {faixa}")
+    return {
+        "aberta":    aberta,
+        "op":        op,
+        "stop_gain": mu.iloc[-1] + k_gain * sd.iloc[-1],
+        "stop_loss": mu.iloc[-1] + k_loss * sd.iloc[-1],
+        "faltam":    faltam,
+    }
 
 
 # ----------------------------------------------------------------------------
