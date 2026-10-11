@@ -1,0 +1,35 @@
+# Alerta diário de entradas e saídas pelo Telegram.
+# Roda de segunda a sexta às 19h30 (horário de Brasília = 22h30 UTC), depois do
+# fechamento da B3. O GitHub pode atrasar execuções agendadas em alguns minutos.
+name: Alerta de operações
+
+on:
+  schedule:
+    - cron: "30 22 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      teste:
+        description: "Enviar mensagem de teste com a situação atual"
+        type: boolean
+        default: true
+
+jobs:
+  alerta:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependências
+        run: pip install yfinance pandas numpy matplotlib requests
+
+      - name: Verificar e enviar alertas
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python alerta.py ${{ (github.event_name == 'workflow_dispatch' && inputs.teste) && '--teste' || '' }}
