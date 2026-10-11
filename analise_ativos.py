@@ -1,12 +1,15 @@
 """
 analise_ativos.py — download de cotações (yfinance) e gráficos de análise técnica.
 
-Uso no notebook:
+Notebook:
     from analise_ativos import *
     precos = baixar_precos(TICKERS)
     plot_ativo(precos, "IBOV")
     plot_hist(precos, "IBOV")
+    tabela_resumo(precos)
     rodape_data(precos)
+
+Streamlit: chame as funções de plot com mostrar=False e use a figura retornada.
 """
 import re
 from itertools import cycle
@@ -15,7 +18,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import yfinance as yf
-from IPython.display import HTML, display
 
 # ----------------------------------------------------------------------------
 # Configuração
@@ -53,7 +55,7 @@ def normalizar_tickers(tickers):
     return [f"{t}.SA" if _RE_B3.fullmatch(t) else t for t in tickers]
 
 
-def baixar_precos(tickers, periodo="3y"):
+def baixar_precos(tickers=TICKERS, periodo="3y"):
     """
     Baixa fechamentos ajustados. Mantém o calendário de cada mercado:
     linhas só são removidas quando TODOS os ativos estão vazios; os NaN de
@@ -81,6 +83,12 @@ def serie(precos, ticker):
     if s.empty:
         raise ValueError(f"Série vazia para {ticker}")
     return s
+
+
+def tabela_resumo(precos, dias=JANELA_PLOT * 2, excluir=NAO_ACOES):
+    """Estatísticas descritivas das ações (exclui índices/câmbio) nos últimos `dias`."""
+    cols = precos.columns.difference(excluir, sort=False)
+    return precos[cols].tail(dias).describe().round(2)
 
 
 # ----------------------------------------------------------------------------
@@ -114,20 +122,29 @@ def moeda(valor):
 
 
 def rodape_data(precos):
-    """Mostra a data do último dado disponível (não a data de hoje)."""
+    """Notebook: mostra a data do último dado disponível (não a data de hoje)."""
+    from IPython.display import HTML, display   # import local: não é dependência do app
     ultimo = precos.index[-1].strftime("%d/%m/%Y")
     display(HTML(f"<div style='text-align:right'><h4>Dados até: {ultimo}</h4></div>"))
+
+
+def _finalizar(fig, mostrar):
+    fig.tight_layout()
+    if mostrar:
+        plt.show()
+    return fig
 
 
 # ----------------------------------------------------------------------------
 # Gráficos
 # ----------------------------------------------------------------------------
-def plot_ativo(precos, ticker, period=JANELA_PLOT, percentual=False):
+def plot_ativo(precos, ticker, period=JANELA_PLOT, percentual=False,
+               figsize=(16, 8), mostrar=True):
     s_full = serie(precos, ticker)
     s = s_full.tail(period)
     media, std = s.mean(), s.std()
 
-    fig, (ax_p, ax_d) = plt.subplots(2, 1, figsize=(16, 8), sharex=True,
+    fig, (ax_p, ax_d) = plt.subplots(2, 1, figsize=figsize, sharex=True,
                                      gridspec_kw={"height_ratios": [3, 1]})
 
     # Preço e médias móveis (calculadas na série cheia, exibidas na janela)
@@ -142,7 +159,7 @@ def plot_ativo(precos, ticker, period=JANELA_PLOT, percentual=False):
         ax_p.axhline(media - k * std, ls="-.", color=cor or "r", lw=lw)
 
     ax_p.set_title(
-        f"{ticker} — Cotação: {moeda(s.iloc[-1])} ({s.index[-1]:%d/%m/%y}) | "
+        f"{ticker} — Cotação: {moeda(s.iloc[-1])} ({s.index[-1]:%d/%m/%y})\n"
         f"Mín: {moeda(s.min())} | Máx: {moeda(s.max())} | "
         f"Méd: {moeda(media)} | Std: {moeda(std)}",
         fontsize=14)
@@ -151,25 +168,24 @@ def plot_ativo(precos, ticker, period=JANELA_PLOT, percentual=False):
 
     # Difusor
     dif = difusor(precos, ticker, period, percentual)
-    ax_d.plot(dif["long"],   color="#808080F0", lw=3,   label=f"Long ({EMA_LONG})")
-    ax_d.plot(dif["medium"], color="tab:blue",  lw=1,   label=f"Medium ({EMA_MEDIUM})")
-    ax_d.plot(dif["short"],  color="red",       lw=2,   label=f"Short ({EMA_FAST}-{EMA_SLOW})")
+    ax_d.plot(dif["long"],   color="#808080F0", lw=3, label=f"Long ({EMA_LONG})")
+    ax_d.plot(dif["medium"], color="tab:blue",  lw=1, label=f"Medium ({EMA_MEDIUM})")
+    ax_d.plot(dif["short"],  color="red",       lw=2, label=f"Short ({EMA_FAST}-{EMA_SLOW})")
     ax_d.axhline(0, color="k", lw=0.6)
     ax_d.legend(loc="upper left")
     ax_d.grid(False)
 
-    fig.tight_layout()
-    plt.show()
+    return _finalizar(fig, mostrar)
 
 
-def plot_hist(precos, ticker, anos=3, bins=30):
+def plot_hist(precos, ticker, anos=3, bins=30, figsize=(16, 6), mostrar=True):
     s = serie(precos, ticker)
     atual, fim = s.iloc[-1], s.index[-1]
     minimo, maximo = s.min() * 0.95, s.max() * 1.05
     faixas = np.linspace(minimo, maximo, bins)
     cores = cycle(["b", "g", "y"])
 
-    fig, ax = plt.subplots(2, anos, figsize=(16, 6), sharey="row", squeeze=False)
+    fig, ax = plt.subplots(2, anos, figsize=figsize, sharey="row", squeeze=False)
 
     for i, cor in zip(range(anos), cores):
         k = anos - i                                    # anos, ..., 2, 1
@@ -194,5 +210,4 @@ def plot_hist(precos, ticker, anos=3, bins=30):
         ax[1, i].grid(False)
 
     fig.suptitle(f"{ticker} — distribuição anual de preços | Atual: {moeda(atual)}", fontsize=14)
-    fig.tight_layout()
-    plt.show()
+    return _finalizar(fig, mostrar)
