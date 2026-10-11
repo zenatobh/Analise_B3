@@ -42,7 +42,9 @@ BANDAS = [  # (multiplicador do desvio, cor, espessura); None = verde acima / ve
 EMA_FAST, EMA_SLOW, EMA_MEDIUM, EMA_LONG = 21, 55, 34, 89
 
 # Sinal de compra: difusor short > long  E  MMA rápida > MMA lenta
+#                  E  preço abaixo de média + K_SIGMA·σ (janela móvel de JANELA_PLOT pregões)
 MMA_RAPIDA, MMA_LENTA = 63, 84
+K_SIGMA = 1
 
 plt.style.use("seaborn-v0_8-colorblind")
 
@@ -145,15 +147,21 @@ def sinal_compra(precos, ticker):
     Sinal de compra dia a dia (série completa do ativo):
       difusor  — short (EMA21−EMA55) acima do long (EMA89 do short)
       mma      — MMA63 acima da MMA84
-      ativo    — as duas condições ao mesmo tempo
+      preco    — preço abaixo de média + 1σ dos últimos 248 pregões (até aquele dia,
+                 sem olhar o futuro; no último pregão é a mesma banda do gráfico em 1A)
+      ativo    — as três condições ao mesmo tempo
     Dias sem MMA84 calculada (início da série) contam como False.
     """
     s = serie(precos, ticker)
     dif = difusor(precos, ticker, period=len(s))
+    # Janela móvel; no início da série aceita a partir de MMA_LENTA pregões
+    janela = s.rolling(JANELA_PLOT, min_periods=MMA_LENTA)
+    teto = janela.mean() + K_SIGMA * janela.std()
     return pd.DataFrame({
         "difusor": dif["short"] > dif["long"],
         "mma":     mma(s, MMA_RAPIDA) > mma(s, MMA_LENTA),
-    }).assign(ativo=lambda d: d["difusor"] & d["mma"])
+        "preco":   s < teto,
+    }).assign(ativo=lambda d: d["difusor"] & d["mma"] & d["preco"])
 
 
 def status_sinal(precos, ticker):
@@ -171,6 +179,8 @@ def status_sinal(precos, ticker):
         faltam.append("difusor short > long")
     if not hoje["mma"]:
         faltam.append(f"MMA{MMA_RAPIDA} > MMA{MMA_LENTA}")
+    if not hoje["preco"]:
+        faltam.append(f"preço abaixo de média + {K_SIGMA:g}σ")
     if not hoje["ativo"]:
         return {"ativo": False, "dias": None, "inicio": None, "faltam": faltam}
     # Comprimento da sequência final de dias ativos
