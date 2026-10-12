@@ -7,10 +7,10 @@ Deploy:  Streamlit Community Cloud apontando para este arquivo.
 import pandas as pd
 import streamlit as st
 
-from analise_ativos import (DIAS_UTEIS_ANO, JANELA_PLOT, K_SIGMA, K_STOP_GAIN,
+from analise_ativos import (HORA_CONSOLIDADO, JANELA_PLOT, K_SIGMA, K_STOP_GAIN,
                             K_STOP_LOSS, MMA_LENTA, MMA_RAPIDA, NAO_ACOES, TICKERS,
-                            baixar_precos, moeda, serie, status_operacao,
-                            tabela_painel, tabela_resumo)
+                            bandas_fixas, base_12m, baixar_precos, falhas, moeda,
+                            provisorio, serie, sinal_hoje, tabela_painel, tabela_resumo)
 from graficos_plotly import aplicar_zoom, config_zoom, fig_ativo, fig_hist
 
 st.set_page_config(page_title="Ativos B3", page_icon="📈", layout="centered")
@@ -63,6 +63,11 @@ except Exception as e:  # rede, rate limit do Yahoo, ticker inválido
         st.rerun()
     st.stop()
 
+if falhas(precos):
+    st.warning(f"Sem dados do Yahoo para: {', '.join(falhas(precos))}. "
+               "Os demais ativos estão atualizados; toque em ↻ para tentar de novo.",
+               icon="⚠️")
+
 topo_esq, topo_dir = st.columns([3, 1])
 topo_esq.caption(f"Dados até {precos.index[-1]:%d/%m/%Y}")
 if topo_dir.button("↻", help="Atualizar dados agora"):
@@ -80,15 +85,15 @@ with aba_ativo:
                           index=opcoes.index("IBOV") if "IBOV" in opcoes else 0)
 
     s = serie(precos, ticker)
-    j = s.tail(JANELA_PLOT)
-    n_ano = min(len(s), DIAS_UTEIS_ANO)
+    mu_1a, sd_1a = bandas_fixas(s)
+    base = base_12m(s)
     c1, c2, c3 = st.columns(3)
     c1.metric("Último", moeda(s.iloc[-1]), delta=pct(s.iloc[-1] / s.iloc[-2] - 1),
               help="Variação em relação ao pregão anterior")
-    c2.metric("12 meses", pct(s.iloc[-1] / s.iloc[-n_ano] - 1),
-              delta=sinal_moeda(s.iloc[-1] - s.iloc[-n_ano]),
+    c2.metric("12 meses", pct(s.iloc[-1] / base - 1),
+              delta=sinal_moeda(s.iloc[-1] - base),
               help="Variação em 12 meses; abaixo, a diferença em pontos/R$")
-    c3.metric("vs. média 1A", f"{(s.iloc[-1] - j.mean()) / j.std():+.1f}σ".replace(".", ","),
+    c3.metric("vs. média 1A", f"{(s.iloc[-1] - mu_1a) / sd_1a:+.1f}σ".replace(".", ","),
               help="Distância do preço atual à média dos últimos 248 pregões, "
                    "em desvios-padrão (mesma referência das bandas do gráfico)")
 
@@ -108,23 +113,33 @@ with aba_ativo:
                          help="Ligado: arraste para ampliar uma região e toque duas vezes "
                               "para voltar. Desligado: o gráfico não muda ao tocar.")
 
-    # Operação: entrada pelo sinal; saída por stop gain ou stop loss (bandas σ)
-    st_op = status_operacao(precos, ticker, k_gain, k_loss)
-    op = st_op["op"]
-    if st_op["aberta"]:
-        dias_txt = "entrou hoje" if op["dias"] == 1 else f"há {op['dias']} pregões"
-        st.success(
-            f"**Comprado** desde {op['entrada']:%d/%m/%y} ({dias_txt}) · "
-            f"entrada {moeda(op['preco_entrada'])} · resultado **{pct(op['resultado'])}**  \n"
-            f"Stop gain ({sigma(k_gain)}): {moeda(st_op['stop_gain'])} · "
-            f"Stop loss ({sigma(k_loss)}): {moeda(st_op['stop_loss'])}", icon="🟢")
+    # Sinal do dia: stop (gain/loss) prevalece sobre COMPRAR
+    sh = sinal_hoje(precos, ticker, k_gain, k_loss)
+    niveis = (f"Stop gain ({sigma(k_gain)}): {moeda(sh['stop_gain'])} "
+              f"({pct(sh['ate_gain'])}) · "
+              f"Stop loss ({sigma(k_loss)}): {moeda(sh['stop_loss'])} "
+              f"({pct(sh['ate_loss'])})")
+    if sh["sinal"] == "comprar":
+        dia_txt = "1º dia" if sh["dia_n"] == 1 else f"{sh['dia_n']}º dia seguido"
+        aviso = ("  \n⚠️ O preço já está abaixo do stop loss."
+                 if sh["abaixo_loss"] else "")
+        st.success(f"**COMPRAR** · {dia_txt} · preço {moeda(sh['preco'])}  \n"
+                   f"{niveis}{aviso}", icon="🟢")
+    elif sh["sinal"] in ("gain", "loss"):
+        op = sh["op"]
+        texto = (f"**{'STOP GAIN' if sh['sinal'] == 'gain' else 'STOP LOSS'}** a "
+                 f"{moeda(op['preco_saida'])} · compra de {op['entrada']:%d/%m/%y} a "
+                 f"{moeda(op['preco_entrada'])} · resultado **{pct(op['resultado'])}** "
+                 f"em {op['dias']} pregões")
+        if sh["sinal"] == "gain":
+            st.success(texto, icon="✅")
+        else:
+            st.error(texto, icon="🛑")
     else:
-        ultima = ""
-        if op is not None:
-            nome = "stop gain" if op["motivo"] == "gain" else "stop loss"
-            ultima = (f"  \nÚltima operação: {op['entrada']:%d/%m/%y} → "
-                      f"{op['saida']:%d/%m/%y}, saiu por {nome} ({pct(op['resultado'])})")
-        st.info(f"**Sem operação** — falta: {' e '.join(st_op['faltam'])}{ultima}", icon="⚪")
+        st.info(f"**Sem sinal hoje** — falta: {' e '.join(sh['faltam'])}", icon="⚪")
+    if provisorio(precos, ticker):
+        st.caption(f"⏳ Pregão em andamento: preço e sinal provisórios até o fechamento "
+                   f"(consolidados após {HORA_CONSOLIDADO:%Hh%M}).")
 
     mostrar_fig(fig_ativo(precos, ticker, period=periodo, k_gain=k_gain, k_loss=k_loss),
                 zoom)
@@ -143,19 +158,25 @@ with aba_painel:
                f"{sigma(k_gain)} ou stop loss {sigma(k_loss)}. "
                f"Faixa, média e σ dos últimos {JANELA_PLOT} pregões. "
                "Toque no nome de uma coluna para ordenar.")
+    prov = [a for a in painel.index if provisorio(precos, a)]
+    if prov:
+        st.caption(f"⏳ Provisórios (pregão em andamento): {', '.join(prov)}.")
     st.dataframe(
-        painel.style.map(cor_variacao, subset=["Result.", "Dia", "12 meses"]),
+        painel.style.map(cor_variacao, subset=["Dia", "12 meses"]),
         width="stretch",
         height=35 * (len(painel) + 1) + 3,      # mostra todas as linhas sem rolagem
         column_config={
-            "Comprado": st.column_config.CheckboxColumn(
-                "Comprado", help="Operação aberta no último pregão"),
-            "Há":       st.column_config.NumberColumn(
-                "Há (pregões)", format="%d",
-                help="Há quantos pregões a operação está aberta (1 = entrou hoje)"),
-            "Result.":  st.column_config.NumberColumn(
-                "Result.", format="percent",
-                help="Resultado da operação aberta até o último fechamento"),
+            "Sinal":    st.column_config.TextColumn(
+                "Sinal hoje", help="COMPRAR, STOP GAIN ou STOP LOSS no último pregão"),
+            "Dia nº":   st.column_config.NumberColumn(
+                "Dia nº", format="%d",
+                help="COMPRAR: há quantos pregões seguidos as condições valem (1 = hoje)"),
+            "Até gain": st.column_config.NumberColumn(
+                "Até gain", format="percent",
+                help="COMPRAR: distância do preço de hoje até o stop gain"),
+            "Até loss": st.column_config.NumberColumn(
+                "Até loss", format="percent",
+                help="COMPRAR: distância do preço de hoje até o stop loss"),
             "Último":   st.column_config.NumberColumn(format="localized"),
             "Dia":      st.column_config.NumberColumn(format="percent"),
             "12 meses": st.column_config.NumberColumn(format="percent"),

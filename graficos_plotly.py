@@ -6,13 +6,14 @@ e layout vertical.
 As versões matplotlib (plot_ativo / plot_hist) continuam em analise_ativos.py
 para uso no notebook.
 """
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from analise_ativos import (BANDAS, EMA_FAST, EMA_LONG, EMA_SLOW, JANELA_PLOT,
-                            K_SIGMA, K_STOP_GAIN, K_STOP_LOSS, MMAS, bandas_moveis,
-                            difusor, mma, moeda, operacoes, serie)
+                            K_SIGMA, K_STOP_GAIN, K_STOP_LOSS, MMAS, bandas_fixas,
+                            bandas_moveis, difusor, mma, moeda, operacoes, serie)
 
 # Cores equivalentes às do matplotlib ("seaborn-v0_8-colorblind")
 COR_PRECO = "#0173B2"
@@ -70,19 +71,21 @@ _LAYOUT_BASE = dict(
 
 def fig_ativo(precos, ticker, period=JANELA_PLOT, altura=620,
               k_gain=K_STOP_GAIN, k_loss=K_STOP_LOSS):
-    """Preço + MMAs + bandas média ± k·desvio (painel 1) e difusor (painel 2)."""
+    """Preço + MMAs + bandas μ ± k·σ dos últimos 248 pregões (painel 1) e difusor (painel 2)."""
     s_full = serie(precos, ticker)
     s = s_full.tail(period)
-    media, std = s.mean(), s.std()
+    media, std = bandas_fixas(s_full)      # sempre os últimos 248 pregões (= regra hoje)
 
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
                         row_heights=[0.72, 0.28], vertical_spacing=0.04)
 
     # Painel 1 — preço e médias móveis (calculadas na série cheia)
+    fig_dados = [s]                       # séries que definem a escala em períodos curtos
     fig.add_trace(go.Scatter(x=s.index, y=s, name="Preço",
                              line=dict(color=COR_PRECO, width=1.8)), row=1, col=1)
     for janela, cor in MMAS:
         m = mma(s_full, janela).tail(period)
+        fig_dados.append(m)
         fig.add_trace(go.Scatter(x=m.index, y=m, name=f"MMA{janela}",
                                  line=dict(color=cor, width=ESPESSURA_MMA.get(janela, 1.2))),
                       row=1, col=1)
@@ -118,6 +121,7 @@ def fig_ativo(precos, ticker, period=JANELA_PLOT, altura=620,
     #   teto da entrada (+1σ) sempre; stop gain e stop loss só durante as operações
     mu, sd = bandas_moveis(s_full)
     mu, sd = mu.loc[ini_janela:], sd.loc[ini_janela:]
+    fig_dados.append(mu + K_SIGMA * sd)
     fig.add_trace(go.Scatter(x=mu.index, y=mu + K_SIGMA * sd, name="Teto entrada",
                              showlegend=False, line=dict(color=CINZA_FORTE, dash="dot",
                                                          width=1)), row=1, col=1)
@@ -126,6 +130,7 @@ def fig_ativo(precos, ticker, period=JANELA_PLOT, altura=620,
         em_op.loc[op["entrada"]:(op["saida"] if pd.notna(op["saida"]) else fim_janela)] = True
     for k, cor, nome in ((k_gain, COR_GAIN, "Stop gain"), (k_loss, COR_LOSS, "Stop loss")):
         nivel = (mu + k * sd).where(em_op)
+        fig_dados.append(nivel)
         fig.add_trace(go.Scatter(x=nivel.index, y=nivel, name=f"Limite {nome.lower()}",
                                  showlegend=False, connectgaps=False,
                                  line=dict(color=cor, dash="dot", width=1.6)), row=1, col=1)
@@ -134,20 +139,36 @@ def fig_ativo(precos, ticker, period=JANELA_PLOT, altura=620,
                                xanchor="right", yanchor="bottom", showarrow=False,
                                font=dict(size=9, color=cor), row=1, col=1)
 
-    # Bandas estáticas da janela: faixa ±1σ sombreada, linhas suaves e rótulos à direita
-    fig.add_hrect(y0=media - std, y1=media + std, fillcolor="rgba(1,115,178,0.07)",
-                  line_width=0, layer="below", row=1, col=1)
+    # Bandas dos últimos 248 pregões (iguais em qualquer período): faixa ±1σ
+    # sombreada, linhas suaves e rótulos à direita. Em períodos curtos a escala segue
+    # os dados (preço, MMAs e limites da regra) e só aparecem as bandas dentro dela;
+    # do contrário as bandas de 1A achatariam o gráfico de 1M.
+    if period < JANELA_PLOT:
+        visiveis = pd.concat([d.loc[ini_janela:] for d in fig_dados]).dropna()
+        lo, hi = visiveis.min(), visiveis.max()
+        folga = 0.04 * (hi - lo) if hi > lo else 0.01 * abs(hi) or 1
+        lo, hi = lo - folga, hi + folga
+        fig.update_yaxes(range=[lo, hi], row=1, col=1)
+    else:
+        lo, hi = -np.inf, np.inf
+
+    def _banda(y, **kw):
+        if lo <= y <= hi:
+            fig.add_hline(y=y, row=1, col=1, **kw)
+
+    fig.add_hrect(y0=max(media - std, lo), y1=min(media + std, hi),
+                  fillcolor="rgba(1,115,178,0.07)", line_width=0, layer="below",
+                  row=1, col=1)
     _rotulo = dict(annotation_position="top right",
                    annotation_font=dict(size=9, color=CINZA_FORTE))
-    fig.add_hline(y=media, line=dict(color="rgba(0,0,255,0.55)", dash="dashdot", width=1.2),
-                  annotation_text="μ", row=1, col=1, **_rotulo)
+    _banda(media, line=dict(color="rgba(0,0,255,0.55)", dash="dashdot", width=1.2),
+           annotation_text="μ", **_rotulo)
     for k, cor, lw in BANDAS:
         rotular = float(k).is_integer()                 # rótulo só em ±1σ e ±2σ
         for sinal, cor_padrao in ((+1, "rgba(0,100,0,0.6)"), (-1, "rgba(220,0,0,0.6)")):
-            fig.add_hline(
-                y=media + sinal * k * std,
+            _banda(
+                media + sinal * k * std,
                 line=dict(color=CINZA_FRACO if cor else cor_padrao, dash="dashdot", width=lw),
-                row=1, col=1,
                 # Só passa o rótulo quando existe: annotation_text=None vira "new text"
                 **({"annotation_text": f"{'+' if sinal > 0 else '−'}{k:g}σ", **_rotulo}
                    if rotular else {}))
@@ -175,7 +196,7 @@ def fig_ativo(precos, ticker, period=JANELA_PLOT, altura=620,
         title=dict(
             text=(f"<b>{ticker}</b> — {moeda(s.iloc[-1])} ({s.index[-1]:%d/%m/%y})<br>"
                   f"<sup>Mín {moeda(s.min())} · Máx {moeda(s.max())} · "
-                  f"Méd {moeda(media)} · Std {moeda(std)}</sup>"),
+                  f"Méd 1A {moeda(media)} · Std 1A {moeda(std)}</sup>"),
             x=0, font=dict(size=15)),
     )
     fig.update_xaxes(showgrid=False)
