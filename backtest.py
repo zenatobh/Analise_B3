@@ -54,9 +54,13 @@ def baixar_cdi(inicio, fim):
         f = min(ini + pd.DateOffset(years=5) - pd.Timedelta(days=1), fim)
         r = requests.get(SGS_CDI, timeout=30, params={
             "formato": "json", "dataInicial": f"{ini:%d/%m/%Y}", "dataFinal": f"{f:%d/%m/%Y}"})
-        r.raise_for_status()
-        partes += r.json()
+        # 404 = nenhum dado no intervalo (ex.: só o dia de hoje, CDI ainda não publicado)
+        if r.status_code != 404:
+            r.raise_for_status()
+            partes += r.json()
         ini = f + pd.Timedelta(days=1)
+    if not partes:
+        raise ValueError("o Banco Central não devolveu dados do CDI no período")
     df = pd.DataFrame(partes)
     taxa = pd.Series(pd.to_numeric(df["valor"]).to_numpy() / 100,
                      index=pd.to_datetime(df["data"], dayfirst=True))
