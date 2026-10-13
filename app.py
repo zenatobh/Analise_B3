@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from analise_ativos import (HORA_CONSOLIDADO, JANELA_PLOT, K_SIGMA, K_STOP_GAIN,
-                            K_STOP_LOSS, MMA_LENTA, MMA_RAPIDA, NAO_ACOES, TICKERS,
+                            MMA_LENTA, MMA_RAPIDA, NAO_ACOES, TICKERS,
                             bandas_fixas, base_12m, baixar_precos, falhas, moeda,
                             provisorio, serie, sinal_hoje, tabela_painel, tabela_resumo)
 from graficos_plotly import aplicar_zoom, config_zoom, fig_ativo, fig_hist
@@ -102,47 +102,32 @@ with aba_ativo:
     periodo = PERIODOS[escolha or PERIODO_PADRAO] or len(s)
 
     with st.expander("Opções"):
-        k_gain = st.select_slider("Stop gain (acima da média)", [1.5, 2.0, 2.5, 3.0],
+        k_gain = st.select_slider("Stop gain (acima da média)", [1.5, 1.8, 2.0, 2.5, 3.0],
                                   value=float(K_STOP_GAIN), format_func=sigma,
                                   help="Sai com lucro quando o fechamento passa desta banda")
-        k_loss = st.select_slider("Stop loss (abaixo da média)", [-2.0, -1.5, -1.0, -0.5],
-                                  value=float(K_STOP_LOSS), format_func=sigma,
-                                  help="Sai com perda quando o fechamento cai abaixo desta "
-                                       "banda")
         zoom = st.toggle("Zoom no gráfico", value=False,
                          help="Ligado: arraste para ampliar uma região e toque duas vezes "
                               "para voltar. Desligado: o gráfico não muda ao tocar.")
 
-    # Sinal do dia: stop (gain/loss) prevalece sobre COMPRAR
-    sh = sinal_hoje(precos, ticker, k_gain, k_loss)
-    niveis = (f"Stop gain ({sigma(k_gain)}): {moeda(sh['stop_gain'])} "
-              f"({pct(sh['ate_gain'])}) · "
-              f"Stop loss ({sigma(k_loss)}): {moeda(sh['stop_loss'])} "
-              f"({pct(sh['ate_loss'])})")
+    # Sinal do dia: STOP GAIN prevalece sobre COMPRAR
+    sh = sinal_hoje(precos, ticker, k_gain)
     if sh["sinal"] == "comprar":
         dia_txt = "1º dia" if sh["dia_n"] == 1 else f"{sh['dia_n']}º dia seguido"
-        aviso = ("  \n⚠️ O preço já está abaixo do stop loss."
-                 if sh["abaixo_loss"] else "")
         st.success(f"**COMPRAR** · {dia_txt} · preço {moeda(sh['preco'])}  \n"
-                   f"{niveis}{aviso}", icon="🟢")
-    elif sh["sinal"] in ("gain", "loss"):
+                   f"Stop gain ({sigma(k_gain)}): {moeda(sh['stop_gain'])} "
+                   f"({pct(sh['ate_gain'])})", icon="🟢")
+    elif sh["sinal"] == "gain":
         op = sh["op"]
-        texto = (f"**{'STOP GAIN' if sh['sinal'] == 'gain' else 'STOP LOSS'}** a "
-                 f"{moeda(op['preco_saida'])} · compra de {op['entrada']:%d/%m/%y} a "
-                 f"{moeda(op['preco_entrada'])} · resultado **{pct(op['resultado'])}** "
-                 f"em {op['dias']} pregões")
-        if sh["sinal"] == "gain":
-            st.success(texto, icon="✅")
-        else:
-            st.error(texto, icon="🛑")
+        st.success(f"**STOP GAIN** a {moeda(op['preco_saida'])} · compra de "
+                   f"{op['entrada']:%d/%m/%y} a {moeda(op['preco_entrada'])} · "
+                   f"resultado **{pct(op['resultado'])}** em {op['dias']} pregões", icon="✅")
     else:
         st.info(f"**Sem sinal hoje** — falta: {' e '.join(sh['faltam'])}", icon="⚪")
     if provisorio(precos, ticker):
         st.caption(f"⏳ Pregão em andamento: preço e sinal provisórios até o fechamento "
                    f"(consolidados após {HORA_CONSOLIDADO:%Hh%M}).")
 
-    mostrar_fig(fig_ativo(precos, ticker, period=periodo, k_gain=k_gain, k_loss=k_loss),
-                zoom)
+    mostrar_fig(fig_ativo(precos, ticker, period=periodo, k_gain=k_gain), zoom)
     st.caption("Arraste sobre o gráfico para dar zoom · toque duplo para voltar."
                if zoom else
                "Toque para ver os valores · use dois dedos para ampliar a tela.")
@@ -152,10 +137,10 @@ with aba_ativo:
 # Aba 2 — visão geral de todos os ativos
 # ----------------------------------------------------------------------------
 with aba_painel:
-    painel = tabela_painel(precos, dias=JANELA_PLOT, k_gain=k_gain, k_loss=k_loss)
+    painel = tabela_painel(precos, dias=JANELA_PLOT, k_gain=k_gain)
     st.caption(f"Entrada: difusor short > long, MMA{MMA_RAPIDA} > MMA{MMA_LENTA} e "
                f"preço abaixo de {sigma(K_SIGMA)}. Saída: stop gain "
-               f"{sigma(k_gain)} ou stop loss {sigma(k_loss)}. "
+               f"{sigma(k_gain)} (sem stop loss). "
                f"Faixa, média e σ dos últimos {JANELA_PLOT} pregões. "
                "Toque no nome de uma coluna para ordenar.")
     prov = [a for a in painel.index if provisorio(precos, a)]
@@ -167,16 +152,13 @@ with aba_painel:
         height=35 * (len(painel) + 1) + 3,      # mostra todas as linhas sem rolagem
         column_config={
             "Sinal":    st.column_config.TextColumn(
-                "Sinal hoje", help="COMPRAR, STOP GAIN ou STOP LOSS no último pregão"),
+                "Sinal hoje", help="COMPRAR ou STOP GAIN no último pregão"),
             "Dia nº":   st.column_config.NumberColumn(
                 "Dia nº", format="%d",
                 help="COMPRAR: há quantos pregões seguidos as condições valem (1 = hoje)"),
             "Até gain": st.column_config.NumberColumn(
                 "Até gain", format="percent",
                 help="COMPRAR: distância do preço de hoje até o stop gain"),
-            "Até loss": st.column_config.NumberColumn(
-                "Até loss", format="percent",
-                help="COMPRAR: distância do preço de hoje até o stop loss"),
             "Último":   st.column_config.NumberColumn(format="localized"),
             "Dia":      st.column_config.NumberColumn(format="percent"),
             "12 meses": st.column_config.NumberColumn(format="percent"),

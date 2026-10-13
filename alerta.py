@@ -4,10 +4,9 @@ alerta.py — envia pelo Telegram os sinais do pregão do dia.
 Roda de segunda a sexta às 19h30 pelo GitHub Actions (.github/workflows/alerta.yml),
 com a mesma regra do app (analise_ativos.sinal_hoje), então alerta e app não divergem.
 
-Sinais (stops primeiro):
+Sinais (stop gain primeiro):
     🟢 COMPRAR     — todo dia em que as três condições de entrada valem
-    ✅ STOP GAIN   — a operação fechou acima de μ + 2σ hoje
-    🛑 STOP LOSS   — a operação fechou abaixo de μ − 1σ hoje
+    ✅ STOP GAIN   — a operação fechou acima de μ + 1,8σ hoje (não há stop loss)
 Ativos cujo último pregão não é hoje (feriado no mercado deles, dado ainda não
 publicado) ficam de fora, para não repetir sinais do dia anterior.
 
@@ -26,8 +25,8 @@ from datetime import datetime
 
 import requests
 
-from analise_ativos import (FUSO, K_STOP_GAIN, K_STOP_LOSS, TICKERS, baixar_precos,
-                            falhas, moeda, serie, sinal_hoje)
+from analise_ativos import (FUSO, K_STOP_GAIN, TICKERS, baixar_precos, falhas, moeda,
+                            serie, sinal_hoje)
 
 URL_APP = "https://ativos-b3.streamlit.app"   # ajuste se o endereço do app for outro
 
@@ -62,31 +61,23 @@ def baixar_com_retentativa(tentativas=3, espera=60):
             time.sleep(espera)
 
 
-def _niveis(sh):
-    return (f"   stop gain ({sigma(K_STOP_GAIN)}): {moeda(sh['stop_gain'])} "
-            f"({pct(sh['ate_gain'])})\n"
-            f"   stop loss ({sigma(K_STOP_LOSS)}): {moeda(sh['stop_loss'])} "
-            f"({pct(sh['ate_loss'])})")
-
-
 def texto_sinal(ticker, sh):
     """Mensagem de um ativo com sinal (None se não houver sinal)."""
     if sh["sinal"] == "comprar":
         dia = "1º dia" if sh["dia_n"] == 1 else f"{sh['dia_n']}º dia seguido"
-        aviso = "\n   ⚠️ preço já abaixo do stop loss" if sh["abaixo_loss"] else ""
         return (f"🟢 <b>COMPRAR {ticker}</b> a {moeda(sh['preco'])} · {dia}\n"
-                f"{_niveis(sh)}{aviso}")
-    if sh["sinal"] in ("gain", "loss"):
+                f"   stop gain ({sigma(K_STOP_GAIN)}): {moeda(sh['stop_gain'])} "
+                f"({pct(sh['ate_gain'])})")
+    if sh["sinal"] == "gain":
         op = sh["op"]
-        icone, nome = ("✅", "STOP GAIN") if sh["sinal"] == "gain" else ("🛑", "STOP LOSS")
-        return (f"{icone} <b>{nome} {ticker}</b> a {moeda(op['preco_saida'])}\n"
+        return (f"✅ <b>STOP GAIN {ticker}</b> a {moeda(op['preco_saida'])}\n"
                 f"   compra {op['entrada']:%d/%m/%y} a {moeda(op['preco_entrada'])} · "
                 f"resultado {pct(op['resultado'])} em {op['dias']} pregões")
     return None
 
 
 def sinais_do_dia(precos, hoje):
-    """Mensagens dos ativos com pregão hoje e algum sinal; stops antes de COMPRAR."""
+    """Mensagens dos ativos com pregão hoje e algum sinal; STOP GAIN antes de COMPRAR."""
     stops, compras = [], []
     for ticker in precos.columns:
         if serie(precos, ticker).index[-1].date() != hoje:

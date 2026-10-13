@@ -12,7 +12,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from analise_ativos import (BANDAS, EMA_FAST, EMA_LONG, EMA_SLOW, JANELA_PLOT,
-                            K_SIGMA, K_STOP_GAIN, K_STOP_LOSS, MMAS, bandas_fixas,
+                            K_SIGMA, K_STOP_GAIN, MMAS, bandas_fixas,
                             bandas_moveis, difusor, mma, moeda, operacoes, serie)
 
 # Cores equivalentes às do matplotlib ("seaborn-v0_8-colorblind")
@@ -55,7 +55,6 @@ MEIO_DIA = pd.Timedelta(hours=12)
 
 
 COR_GAIN = "#1a9850"
-COR_LOSS = "#d73027"
 
 _LAYOUT_BASE = dict(
     template="plotly_white",
@@ -69,8 +68,7 @@ _LAYOUT_BASE = dict(
 )
 
 
-def fig_ativo(precos, ticker, period=JANELA_PLOT, altura=620,
-              k_gain=K_STOP_GAIN, k_loss=K_STOP_LOSS):
+def fig_ativo(precos, ticker, period=JANELA_PLOT, altura=620, k_gain=K_STOP_GAIN):
     """Preço + MMAs + bandas μ ± k·σ dos últimos 248 pregões (painel 1) e difusor (painel 2)."""
     s_full = serie(precos, ticker)
     s = s_full.tail(period)
@@ -90,11 +88,10 @@ def fig_ativo(precos, ticker, period=JANELA_PLOT, altura=620,
                                  line=dict(color=cor, width=ESPESSURA_MMA.get(janela, 1.2))),
                       row=1, col=1)
 
-    # Operações: faixa verde da entrada à saída, ▲ na entrada, ▼ na saída
-    # (verde = stop gain, vermelho = stop loss)
-    ops = operacoes(precos, ticker, k_gain, k_loss)
+    # Operações: faixa verde da entrada à saída, ▲ na entrada, ▼ no stop gain
+    ops = operacoes(precos, ticker, k_gain)
     ini_janela, fim_janela = s.index[0], s.index[-1]
-    entradas, saidas = [], {"gain": [], "loss": []}
+    entradas, saidas = [], []
     for _, op in ops.iterrows():
         fim_op = op["saida"] if pd.notna(op["saida"]) else fim_janela
         if fim_op < ini_janela:
@@ -105,7 +102,7 @@ def fig_ativo(precos, ticker, period=JANELA_PLOT, altura=620,
         if op["entrada"] >= ini_janela:
             entradas.append(op["entrada"])
         if pd.notna(op["saida"]):
-            saidas[op["motivo"]].append(op["saida"])
+            saidas.append(op["saida"])
 
     def _marcas(datas, nome, simbolo, cor):
         if datas:
@@ -114,11 +111,10 @@ def fig_ativo(precos, ticker, period=JANELA_PLOT, altura=620,
                                                  line=dict(color="white", width=1))),
                           row=1, col=1)
     _marcas(entradas, "Entrada", "triangle-up", COR_MARCA_SINAL)
-    _marcas(saidas["gain"], "Stop gain", "triangle-down", COR_GAIN)
-    _marcas(saidas["loss"], "Stop loss", "triangle-down", COR_LOSS)
+    _marcas(saidas, "Stop gain", "triangle-down", COR_GAIN)
 
     # Limites que a regra usou em cada dia (bandas dos 248 pregões até aquele dia):
-    #   teto da entrada (+1σ) sempre; stop gain e stop loss só durante as operações
+    #   teto da entrada (+1σ) sempre; stop gain só durante as operações
     mu, sd = bandas_moveis(s_full)
     mu, sd = mu.loc[ini_janela:], sd.loc[ini_janela:]
     fig_dados.append(mu + K_SIGMA * sd)
@@ -128,16 +124,15 @@ def fig_ativo(precos, ticker, period=JANELA_PLOT, altura=620,
     em_op = pd.Series(False, index=mu.index)
     for _, op in ops.iterrows():
         em_op.loc[op["entrada"]:(op["saida"] if pd.notna(op["saida"]) else fim_janela)] = True
-    for k, cor, nome in ((k_gain, COR_GAIN, "Stop gain"), (k_loss, COR_LOSS, "Stop loss")):
-        nivel = (mu + k * sd).where(em_op)
-        fig_dados.append(nivel)
-        fig.add_trace(go.Scatter(x=nivel.index, y=nivel, name=f"Limite {nome.lower()}",
-                                 showlegend=False, connectgaps=False,
-                                 line=dict(color=cor, dash="dot", width=1.6)), row=1, col=1)
-        if em_op.iloc[-1]:                                  # operação aberta: rótulo no fim
-            fig.add_annotation(x=nivel.index[-1], y=nivel.iloc[-1], text=nome.lower(),
-                               xanchor="right", yanchor="bottom", showarrow=False,
-                               font=dict(size=9, color=cor), row=1, col=1)
+    nivel = (mu + k_gain * sd).where(em_op)
+    fig_dados.append(nivel)
+    fig.add_trace(go.Scatter(x=nivel.index, y=nivel, name="Limite stop gain",
+                             showlegend=False, connectgaps=False,
+                             line=dict(color=COR_GAIN, dash="dot", width=1.6)), row=1, col=1)
+    if em_op.iloc[-1]:                                      # operação aberta: rótulo no fim
+        fig.add_annotation(x=nivel.index[-1], y=nivel.iloc[-1], text="stop gain",
+                           xanchor="right", yanchor="bottom", showarrow=False,
+                           font=dict(size=9, color=COR_GAIN), row=1, col=1)
 
     # Bandas dos últimos 248 pregões (iguais em qualquer período): faixa ±1σ
     # sombreada, linhas suaves e rótulos à direita. Em períodos curtos a escala segue

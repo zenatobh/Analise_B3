@@ -49,12 +49,10 @@ EMA_FAST, EMA_SLOW, EMA_MEDIUM, EMA_LONG = 21, 55, 34, 89   # EMA_MEDIUM não é
 
 # Regra de operação (bandas móveis de JANELA_PLOT pregões: média μ e desvio σ até cada dia)
 #   Entrada:    difusor short > long  E  MMA63 > MMA84  E  preço < μ + K_SIGMA·σ
-#   Stop gain:  fechamento acima de μ + K_STOP_GAIN·σ
-#   Stop loss:  fechamento abaixo de μ + K_STOP_LOSS·σ
+#   Saída:      stop gain — fechamento acima de μ + K_STOP_GAIN·σ (não há stop loss)
 MMA_RAPIDA, MMA_LENTA = 63, 84
 K_SIGMA = 1          # teto da entrada (+1σ)
-K_STOP_GAIN = 2      # +2σ
-K_STOP_LOSS = -1     # −1σ
+K_STOP_GAIN = 1.8    # +1,8σ
 
 # Antes deste horário (Brasília), uma barra com a data de hoje é tratada como
 # provisória: pregão em andamento, o "fechamento" ainda é o preço corrente.
@@ -204,21 +202,20 @@ def sinal_compra(precos, ticker):
     }).assign(ativo=lambda d: d["difusor"] & d["mma"] & d["preco"])
 
 
-def operacoes(precos, ticker, k_gain=K_STOP_GAIN, k_loss=K_STOP_LOSS):
+def operacoes(precos, ticker, k_gain=K_STOP_GAIN):
     """
-    Simula as operações pelos fechamentos (uso interno, para os stops):
+    Simula as operações pelos fechamentos (uso interno, para o stop gain):
       - entra no fechamento do primeiro dia com sinal ativo, se não houver operação aberta;
       - a partir do pregão seguinte, sai no primeiro fechamento acima de μ + k_gain·σ
-        (stop gain) ou abaixo de μ + k_loss·σ (stop loss);
+        (stop gain). Não há stop loss: a operação fica aberta até o stop gain;
       - enquanto a operação está aberta, o sinal de entrada é ignorado.
     Retorna um DataFrame com uma linha por operação: entrada, preco_entrada, saida,
-    preco_saida, motivo ("gain", "loss" ou None se aberta), resultado (fração) e dias.
+    preco_saida, motivo ("gain" ou None se aberta), resultado (fração) e dias.
     """
     s = serie(precos, ticker)
     ativo = sinal_compra(precos, ticker)["ativo"].to_numpy()
     mu, sd = bandas_moveis(s)
     teto = (mu + k_gain * sd).to_numpy()
-    piso = (mu + k_loss * sd).to_numpy()
     p, idx = s.to_numpy(), s.index
 
     ops, aberta = [], None
@@ -227,9 +224,8 @@ def operacoes(precos, ticker, k_gain=K_STOP_GAIN, k_loss=K_STOP_LOSS):
             if ativo[i]:
                 aberta = i
             continue
-        motivo = "gain" if p[i] > teto[i] else "loss" if p[i] < piso[i] else None
-        if motivo:
-            ops.append((aberta, i, motivo))
+        if p[i] > teto[i]:
+            ops.append((aberta, i, "gain"))
             aberta = None
     if aberta is not None:
         ops.append((aberta, None, None))
@@ -250,34 +246,31 @@ def operacoes(precos, ticker, k_gain=K_STOP_GAIN, k_loss=K_STOP_LOSS):
                                          "motivo", "resultado", "dias"])
 
 
-def sinal_hoje(precos, ticker, k_gain=K_STOP_GAIN, k_loss=K_STOP_LOSS):
+def sinal_hoje(precos, ticker, k_gain=K_STOP_GAIN):
     """
     Sinal do último pregão do ativo:
-      sinal      — "gain" / "loss" (a operação fechou hoje; prevalece sobre a compra),
+      sinal      — "gain" (a operação fechou hoje no stop gain; prevalece sobre a compra),
                    "comprar" (as três condições de entrada valem hoje) ou None
       data       — data do último pregão
       preco      — último fechamento
       stop_gain  — nível de hoje de μ + k_gain·σ;  ate_gain — distância do preço (fração)
-      stop_loss  — nível de hoje de μ + k_loss·σ;  ate_loss — distância do preço (fração)
-      abaixo_loss — preço já abaixo do stop loss (só faz sentido com "comprar")
       dia_n      — "comprar": há quantos pregões seguidos as condições valem (1 = hoje)
-      op         — "gain"/"loss": a operação que fechou hoje (entrada, resultado…)
+      op         — "gain": a operação que fechou hoje (entrada, resultado…)
       faltam     — None: condições de entrada não atendidas hoje
     """
     s = serie(precos, ticker)
     mu, sd = bandas_moveis(s)
     preco, data = s.iloc[-1], s.index[-1]
-    gain, loss = mu.iloc[-1] + k_gain * sd.iloc[-1], mu.iloc[-1] + k_loss * sd.iloc[-1]
+    gain = mu.iloc[-1] + k_gain * sd.iloc[-1]
 
     cond = sinal_compra(precos, ticker)
     ativo = cond["ativo"].to_numpy()
-    ops = operacoes(precos, ticker, k_gain, k_loss)
+    ops = operacoes(precos, ticker, k_gain)
     ult = ops.iloc[-1] if len(ops) else None
 
     res = {"sinal": None, "data": data, "preco": preco,
-           "stop_gain": gain, "stop_loss": loss,
-           "ate_gain": gain / preco - 1, "ate_loss": loss / preco - 1,
-           "abaixo_loss": bool(preco < loss), "dia_n": None, "op": None, "faltam": []}
+           "stop_gain": gain, "ate_gain": gain / preco - 1,
+           "dia_n": None, "op": None, "faltam": []}
 
     if ult is not None and ult["saida"] == data:
         res.update(sinal=ult["motivo"], op=ult)
@@ -297,14 +290,13 @@ def sinal_hoje(precos, ticker, k_gain=K_STOP_GAIN, k_loss=K_STOP_LOSS):
     return res
 
 
-ROTULO_SINAL = {"comprar": "🟢 COMPRAR", "gain": "✅ STOP GAIN", "loss": "🛑 STOP LOSS",
-                None: "⚪ —"}
+ROTULO_SINAL = {"comprar": "🟢 COMPRAR", "gain": "✅ STOP GAIN", None: "⚪ —"}
 
 
-def tabela_painel(precos, dias=JANELA_PLOT, k_gain=K_STOP_GAIN, k_loss=K_STOP_LOSS):
+def tabela_painel(precos, dias=JANELA_PLOT, k_gain=K_STOP_GAIN):
     """
-    Visão geral de todos os ativos: sinal de hoje (com Nº dia e distância até os
-    stops quando é COMPRAR), último preço, variação no dia e em 12 meses, posição na
+    Visão geral de todos os ativos: sinal de hoje (com Nº dia e distância até o
+    stop gain quando é COMPRAR), último preço, variação no dia e em 12 meses, posição na
     faixa mín–máx dos últimos `dias` pregões (0 = mínima, 1 = máxima) e distância
     da média em σ.
     """
@@ -313,14 +305,13 @@ def tabela_painel(precos, dias=JANELA_PLOT, k_gain=K_STOP_GAIN, k_loss=K_STOP_LO
         s = serie(precos, ticker)
         j = s.tail(dias)
         ultimo, minimo, maximo = j.iloc[-1], j.min(), j.max()
-        sh = sinal_hoje(precos, ticker, k_gain, k_loss)
+        sh = sinal_hoje(precos, ticker, k_gain)
         comprar = sh["sinal"] == "comprar"
         mu, sd = bandas_fixas(s)
         linhas[ticker] = {
             "Sinal":    ROTULO_SINAL[sh["sinal"]],
             "Dia nº":   sh["dia_n"] if comprar else None,
             "Até gain": sh["ate_gain"] if comprar else np.nan,
-            "Até loss": sh["ate_loss"] if comprar else np.nan,
             "Último":   ultimo,
             "Dia":      ultimo / s.iloc[-2] - 1 if len(s) > 1 else np.nan,
             "12 meses": _var_12m(s),
