@@ -227,7 +227,9 @@ def fig_hist(precos, ticker, anos=3, bins=30, altura=None):
             janelas.append((janela, CORES_ANOS[i % len(CORES_ANOS)]))
     n = len(janelas)
 
-    fig = make_subplots(rows=1 + n, cols=1, vertical_spacing=0.035,
+    # Espaço entre painéis em pixels (cabe a escala de preço de cada histograma)
+    altura = altura or 340 + 165 * n
+    fig = make_subplots(rows=1 + n, cols=1, vertical_spacing=min(0.1, 34 / altura),
                         row_heights=[0.34] + [0.66 / n] * n)
     linha_atual = dict(color="red", dash="dashdot", width=1)
 
@@ -252,8 +254,9 @@ def fig_hist(precos, ticker, anos=3, bins=30, altura=None):
         # Período como título do eixo y (não cobre as barras)
         fig.update_yaxes(title_text=f"<b>{rotulo}</b>",
                          title_font=dict(color=cor, size=10), row=r, col=1)
-        fig.update_xaxes(range=[minimo, maximo], tickformat=",.0f",
-                         showticklabels=(r == n + 1), row=r, col=1)
+        # Escala de preço em todos os histogramas (o eixo é preço, não data)
+        fig.update_xaxes(range=[minimo, maximo], tickformat=",.0f", showticklabels=True,
+                         tickfont=dict(size=9), row=r, col=1)
         if r > 2:
             # Contagem ligada à do 1º histograma: mesma escala nos três.
             # O eixo de preço NÃO é ligado (a faixa já é fixada igual acima): no
@@ -262,14 +265,22 @@ def fig_hist(precos, ticker, anos=3, bins=30, altura=None):
             # (Ligar o y2 a ele mesmo também quebra o ajuste automático.)
             fig.update_yaxes(matches="y2", row=r, col=1)
 
+    fig.update_xaxes(title_text="Preço", title_font=dict(size=10), title_standoff=4,
+                     row=n + 1, col=1)
+
     fig.update_layout(
         **_LAYOUT_BASE,
-        height=altura or 300 + 150 * n,
+        height=altura,
         bargap=0.05,
         title=dict(text=(f"<b>{ticker}</b> — distribuição anual de preços<br>"
-                         f"<sup>Atual: {moeda(atual)}</sup>"), x=0, font=dict(size=15)),
+                         f"<sup>Atual: {moeda(atual)}</sup>"),
+                   x=0, y=1 - 10 / altura, yanchor="top", font=dict(size=15)),
     )
-    fig.update_layout(hovermode="closest", margin=dict(t=95), legend=dict(y=1.02))
+    # Legenda dos anos logo abaixo do título, medida em pixels a partir do topo da
+    # figura (yref="container"): não sobe sobre o título quando quebra em 2 linhas
+    # no celular. A margem superior reserva espaço para título + 2 linhas de legenda.
+    fig.update_layout(hovermode="closest", margin=dict(t=118, b=40),
+                      legend=dict(yref="container", y=1 - 58 / altura, yanchor="top"))
     fig.update_xaxes(showgrid=False)
     fig.update_yaxes(showgrid=False)
     fig.update_yaxes(range=[minimo, maximo], tickformat=",.0f", row=1, col=1)
