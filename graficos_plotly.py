@@ -255,9 +255,11 @@ def fig_hist(precos, ticker, anos=3, bins=30, altura=None):
         fig.update_xaxes(range=[minimo, maximo], tickformat=",.0f",
                          showticklabels=(r == n + 1), row=r, col=1)
         if r > 2:
-            # Eixos ligados ao 1º histograma: mesma escala e zoom sincronizado.
-            # (Ligar o x2/y2 a ele mesmo quebra o ajuste automático da escala.)
-            fig.update_xaxes(matches="x2", row=r, col=1)
+            # Contagem ligada à do 1º histograma: mesma escala nos três.
+            # O eixo de preço NÃO é ligado (a faixa já é fixada igual acima): no
+            # plotly.js 4 (Streamlit atual), ligar x e y ao mesmo tempo faz o ajuste
+            # automático da contagem falhar e travar em −1…4, cortando as barras.
+            # (Ligar o y2 a ele mesmo também quebra o ajuste automático.)
             fig.update_yaxes(matches="y2", row=r, col=1)
 
     fig.update_layout(
