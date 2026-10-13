@@ -7,21 +7,26 @@ com a mesma regra do app (analise_ativos.sinal_hoje), então alerta e app não d
 Sinais (stop gain primeiro):
     🟢 COMPRAR     — todo dia em que as três condições de entrada valem
     ✅ STOP GAIN   — a operação fechou acima de μ + 1,8σ hoje (não há stop loss)
-Ativos cujo último pregão não é hoje (feriado no mercado deles, dado ainda não
-publicado) ficam de fora, para não repetir sinais do dia anterior.
+Pregão de referência = data de 12 h atrás (Brasília): a execução das 19h30 aponta
+para o próprio dia e uma execução que o GitHub atrase para a madrugada continua
+apontando para o pregão certo. Ativos sem dado nessa data ficam de fora, para não
+repetir sinais do dia anterior; os da B3 nessa situação são avisados na mensagem.
+
+Toda execução agendada envia uma mensagem — sinais, "sem sinais" ou "sem pregão na
+B3" —, então silêncio no Telegram significa que o alerta não rodou.
 
 Variáveis de ambiente (segredos do repositório no GitHub):
     TELEGRAM_TOKEN    token do bot (BotFather)
     TELEGRAM_CHAT_ID  id do chat que recebe as mensagens
 
 Uso:
-    python alerta.py            # envia só se houver algum sinal hoje (ou falha de dados)
+    python alerta.py            # sinais do pregão de referência (sempre envia mensagem)
     python alerta.py --teste    # envia a situação de todos os ativos (teste)
 """
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 
@@ -29,6 +34,14 @@ from analise_ativos import (FUSO, K_STOP_GAIN, TICKERS, baixar_precos, falhas, m
                             serie, sinal_hoje)
 
 URL_APP = "https://ativos-b3.streamlit.app"   # ajuste se o endereço do app for outro
+
+FORA_B3 = {"SP500", "USDBRL"}       # negociados fora da B3 (outro calendário)
+ATRASO_MAX = timedelta(hours=12)    # tolerância a atrasos do agendamento do GitHub
+
+
+def pregao_referencia(agora=None):
+    """Data do pregão que o alerta avalia: o dia de 12 h atrás, em Brasília."""
+    return ((agora or datetime.now(FUSO)) - ATRASO_MAX).date()
 
 
 def pct(x):
@@ -76,11 +89,16 @@ def texto_sinal(ticker, sh):
     return None
 
 
-def sinais_do_dia(precos, hoje):
-    """Mensagens dos ativos com pregão hoje e algum sinal; STOP GAIN antes de COMPRAR."""
+def tem_pregao(precos, ticker, dia):
+    """True se o último dado do ativo é do dia de referência."""
+    return serie(precos, ticker).index[-1].date() == dia
+
+
+def sinais_do_dia(precos, dia):
+    """Mensagens dos ativos com pregão no dia e algum sinal; STOP GAIN antes de COMPRAR."""
     stops, compras = [], []
     for ticker in precos.columns:
-        if serie(precos, ticker).index[-1].date() != hoje:
+        if not tem_pregao(precos, ticker, dia):
             continue
         sh = sinal_hoje(precos, ticker)
         msg = texto_sinal(ticker, sh)
@@ -105,10 +123,15 @@ def aviso_falhas(precos):
     return f"⚠️ Sem dados do Yahoo para: {', '.join(f)}" if f else ""
 
 
+def b3_sem_pregao(precos, dia):
+    """Ativos da B3 sem dado no dia de referência."""
+    return [t for t in precos.columns if t not in FORA_B3 and not tem_pregao(precos, t, dia)]
+
+
 def main():
     precos = baixar_com_retentativa()
     ultimo = precos.index[-1].date()
-    hoje = datetime.now(FUSO).date()
+    dia = pregao_referencia()
     aviso = aviso_falhas(precos)
 
     if "--teste" in sys.argv:
@@ -117,16 +140,29 @@ def main():
         print("Mensagem de teste enviada.")
         return
 
-    msgs = sinais_do_dia(precos, hoje)
-    if not msgs and not aviso:
-        print(f"Sem sinais em {hoje:%d/%m/%Y} (dados até {ultimo:%d/%m/%Y}).")
-        return
-    titulo = "Sinais de" if msgs else "Sem sinais em"
-    partes = [f"📈 <b>{titulo} {hoje:%d/%m/%Y}</b>"] + msgs
+    msgs = sinais_do_dia(precos, dia)      # inclui SP500/USDBRL se tiveram pregão no dia
+    faltando = b3_sem_pregao(precos, dia)
+    b3 = [t for t in precos.columns if t not in FORA_B3]
+    sem_b3 = bool(b3) and len(faltando) == len(b3)
+    if sem_b3:
+        # Nenhum ativo da B3 com dado do dia: feriado ou Yahoo ainda sem o fechamento
+        ultimo_b3 = max(serie(precos, t).index[-1] for t in b3)
+        partes = [f"📭 <b>Sem pregão na B3 em {dia:%d/%m/%Y}</b>\n"
+                  f"Feriado ou dados ainda não publicados pelo Yahoo "
+                  f"(B3 até {ultimo_b3:%d/%m/%Y})."] + msgs
+    else:
+        titulo = "Sinais de" if msgs else "Sem sinais em"
+        partes = [f"📈 <b>{titulo} {dia:%d/%m/%Y}</b>"] + msgs
+    if faltando and not sem_b3:
+        partes.append(f"⚠️ Sem o pregão de {dia:%d/%m} no Yahoo: {', '.join(faltando)} "
+                      "(sinais desses ativos não avaliados)")
     if aviso:
         partes.append(aviso)
     enviar("\n\n".join(partes) + f"\n\n<a href='{URL_APP}'>Abrir o app</a>")
-    print(f"{len(msgs)} sinal(is) enviado(s)" + (f"; {aviso}" if aviso else "") + ".")
+    print(f"{dia:%d/%m/%Y}: {len(msgs)} sinal(is) enviado(s)"
+          + ("; sem pregão na B3" if sem_b3 else
+             f"; sem pregão: {', '.join(faltando)}" if faltando else "")
+          + (f"; {aviso}" if aviso else "") + ".")
 
 
 if __name__ == "__main__":
