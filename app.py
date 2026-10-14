@@ -8,7 +8,8 @@ import pandas as pd
 import streamlit as st
 
 from analise_ativos import (HORA_CONSOLIDADO, JANELA_PLOT, K_SIGMA, K_STOP_GAIN,
-                            MMA_LENTA, MMA_RAPIDA, NAO_ACOES, TICKERS,
+                            ACOMPANHAMENTO, MMA_LENTA, MMA_RAPIDA, NAO_ACOES, TICKERS,
+                            aporte_do_mes,
                             bandas_fixas, base_12m, baixar_precos, falhas, moeda,
                             provisorio, serie, sinal_hoje, tabela_painel, tabela_resumo)
 from graficos_plotly import aplicar_zoom, config_zoom, fig_ativo, fig_hist
@@ -42,6 +43,16 @@ def sinal_moeda(x):
 def sigma(k):
     """Nível em σ no formato brasileiro, com sinal: +2σ, −1,5σ."""
     return f"{k:+g}σ".replace(".", ",").replace("-", "−")
+
+
+def em_sigma(v):
+    """Distância em σ no formato brasileiro: +1,2σ, −0,8σ."""
+    v = round(v, 1) + 0.0        # evita "−0,0σ"
+    return f"{v:+.1f}σ".replace(".", ",").replace("-", "−").replace("+0,0", "0,0")
+
+
+def dia_txt(n):
+    return "1º dia" if n == 1 else f"{n}º dia seguido"
 
 
 def cor_variacao(v):
@@ -111,16 +122,19 @@ with aba_ativo:
 
     # Sinal do dia: STOP GAIN prevalece sobre COMPRAR
     sh = sinal_hoje(precos, ticker, k_gain)
-    if sh["sinal"] == "comprar":
-        dia_txt = "1º dia" if sh["dia_n"] == 1 else f"{sh['dia_n']}º dia seguido"
-        st.success(f"**COMPRAR** · {dia_txt} · preço {moeda(sh['preco'])}  \n"
-                   f"Stop gain ({sigma(k_gain)}): {moeda(sh['stop_gain'])} "
-                   f"({pct(sh['ate_gain'])})", icon="🟢")
+    if sh["acompanhamento"]:
+        st.info("**Só acompanhamento** — sem sinais de compra (modos A e B).", icon="👁")
+    elif sh["sinal"] == "comprar":
+        st.success(f"**COMPRAR** · {dia_txt(sh['dia_n'])} · preço {moeda(sh['preco'])}  \n"
+                   f"Modo A: entrada; stop gain ({sigma(k_gain)}) em "
+                   f"{moeda(sh['stop_gain'])} ({pct(sh['ate_gain'])})  \n"
+                   "Modo B: prioridade no aporte do mês", icon="🟢")
     elif sh["sinal"] == "gain":
         op = sh["op"]
-        st.success(f"**STOP GAIN** a {moeda(op['preco_saida'])} · compra de "
+        st.success(f"**STOP GAIN · modo A** a {moeda(op['preco_saida'])} · compra de "
                    f"{op['entrada']:%d/%m/%y} a {moeda(op['preco_entrada'])} · "
-                   f"resultado **{pct(op['resultado'])}** em {op['dias']} pregões", icon="✅")
+                   f"resultado **{pct(op['resultado'])}** em {op['dias']} pregões  \n"
+                   "Vale só para compras do modo A — no modo B não se vende.", icon="✅")
     else:
         st.info(f"**Sem sinal hoje** — falta: {' e '.join(sh['faltam'])}", icon="⚪")
     if provisorio(precos, ticker):
@@ -137,10 +151,33 @@ with aba_ativo:
 # Aba 2 — visão geral de todos os ativos
 # ----------------------------------------------------------------------------
 with aba_painel:
+    # Modo B — aporte do mês: COMPRAR hoje (dividindo) ou o mais abaixo da média
+    ap = aporte_do_mes(precos)
+    if ap["ativos"]:
+        rk = ap["ranking"]
+        if ap["motivo"] == "comprar":
+            onde = " e ".join(ap["ativos"])
+            dias = ", ".join(f"{a} {dia_txt(int(rk.at[a, 'dia_n']))}" for a in ap["ativos"])
+            motivo = (f"COMPRAR hoje ({dias})"
+                      + (" — dividir o aporte igualmente" if len(ap["ativos"]) > 1 else ""))
+        else:
+            onde = ap["ativos"][0]
+            motivo = f"a mais abaixo da média ({em_sigma(rk.at[onde, 'sigma'])})"
+        seguintes = [a for a in rk.index if a not in ap["ativos"]][:3]
+        fila = " · ".join(f"{a} ({em_sigma(rk.at[a, 'sigma'])})" for a in seguintes)
+        st.info(f"**Modo B — aporte de hoje: {onde}**  \n{motivo}  \n"
+                f"Seguintes: {fila}", icon="💰")
+        st.caption("Modo B: compre no dia do aporte e não venda — o STOP GAIN é só do "
+                   "modo A. Prioridade para COMPRAR hoje; sem sinal, a mais abaixo da "
+                   f"média dos últimos {JANELA_PLOT} pregões (coluna σ da média)."
+                   + (" ⏳ Pregão em andamento: indicação provisória."
+                      if any(provisorio(precos, a) for a in ap["ativos"]) else ""))
+
     painel = tabela_painel(precos, dias=JANELA_PLOT, k_gain=k_gain)
-    st.caption(f"Entrada: difusor short > long, MMA{MMA_RAPIDA} > MMA{MMA_LENTA} e "
-               f"preço abaixo de {sigma(K_SIGMA)}. Saída: stop gain "
-               f"{sigma(k_gain)} (sem stop loss). "
+    st.caption(f"**Modo A** — entrada no COMPRAR (difusor short > long, "
+               f"MMA{MMA_RAPIDA} > MMA{MMA_LENTA} e preço abaixo de {sigma(K_SIGMA)}); "
+               f"saída no stop gain {sigma(k_gain)} (sem stop loss); fora das operações, "
+               f"CDI. 👁 = só acompanhamento, sem sinais ({', '.join(ACOMPANHAMENTO)}). "
                f"Faixa, média e σ dos últimos {JANELA_PLOT} pregões. "
                "Toque no nome de uma coluna para ordenar.")
     prov = [a for a in painel.index if provisorio(precos, a)]
@@ -152,7 +189,8 @@ with aba_painel:
         height=35 * (len(painel) + 1) + 3,      # mostra todas as linhas sem rolagem
         column_config={
             "Sinal":    st.column_config.TextColumn(
-                "Sinal hoje", help="COMPRAR ou STOP GAIN no último pregão"),
+                "Sinal hoje", help="COMPRAR (modos A e B) ou STOP GAIN (só modo A) "
+                                   "no último pregão; 👁 = só acompanhamento"),
             "Dia nº":   st.column_config.NumberColumn(
                 "Dia nº", format="%d",
                 help="COMPRAR: há quantos pregões seguidos as condições valem (1 = hoje)"),

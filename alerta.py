@@ -4,9 +4,14 @@ alerta.py — envia pelo Telegram os sinais do pregão do dia.
 Roda de segunda a sexta às 19h30 pelo GitHub Actions (.github/workflows/alerta.yml),
 com a mesma regra do app (analise_ativos.sinal_hoje), então alerta e app não divergem.
 
-Sinais (stop gain primeiro):
-    🟢 COMPRAR     — todo dia em que as três condições de entrada valem
-    ✅ STOP GAIN   — a operação fechou acima de μ + 1,8σ hoje (não há stop loss)
+A mensagem separa as duas estratégias:
+    🅰️ Modo A — operação com stop gain (stop gain primeiro):
+        🟢 COMPRAR     — todo dia em que as três condições de entrada valem
+        ✅ STOP GAIN   — a operação fechou acima de μ + 1,8σ hoje (não há stop loss);
+                         vale só para o que foi comprado pelo modo A
+    IBOV, S&P 500, dólar e BOVA11 são só acompanhamento: nunca geram sinal.
+    🅱️ Modo B — aporte do mês (só no 1º pregão de cada mês na B3):
+        💰 onde aportar: COMPRAR hoje (dividindo) ou o mais abaixo da média; nunca vende
 Pregão de referência = data de 12 h atrás (Brasília): a execução das 19h30 aponta
 para o próprio dia e uma execução que o GitHub atrase para a madrugada continua
 apontando para o pregão certo. Ativos sem dado nessa data ficam de fora, para não
@@ -30,8 +35,8 @@ from datetime import datetime, timedelta
 
 import requests
 
-from analise_ativos import (FUSO, K_STOP_GAIN, TICKERS, baixar_precos, falhas, moeda,
-                            serie, sinal_hoje)
+from analise_ativos import (FUSO, K_STOP_GAIN, TICKERS, aporte_do_mes, baixar_precos,
+                            falhas, moeda, serie, sinal_hoje)
 
 URL_APP = "https://ativos-b3.streamlit.app"   # ajuste se o endereço do app for outro
 
@@ -74,11 +79,19 @@ def baixar_com_retentativa(tentativas=3, espera=60):
             time.sleep(espera)
 
 
+def em_sigma(v):
+    v = round(v, 1) + 0.0        # evita "−0,0σ"
+    return f"{v:+.1f}σ".replace(".", ",").replace("-", "−").replace("+0,0", "0,0")
+
+
+def dia_txt(n):
+    return "1º dia" if n == 1 else f"{n}º dia seguido"
+
+
 def texto_sinal(ticker, sh):
     """Mensagem de um ativo com sinal (None se não houver sinal)."""
     if sh["sinal"] == "comprar":
-        dia = "1º dia" if sh["dia_n"] == 1 else f"{sh['dia_n']}º dia seguido"
-        return (f"🟢 <b>COMPRAR {ticker}</b> a {moeda(sh['preco'])} · {dia}\n"
+        return (f"🟢 <b>COMPRAR {ticker}</b> a {moeda(sh['preco'])} · {dia_txt(sh['dia_n'])}\n"
                 f"   stop gain ({sigma(K_STOP_GAIN)}): {moeda(sh['stop_gain'])} "
                 f"({pct(sh['ate_gain'])})")
     if sh["sinal"] == "gain":
@@ -107,14 +120,67 @@ def sinais_do_dia(precos, dia):
     return stops + compras
 
 
+TITULO_A = "🅰️ <b>Modo A — operação com stop gain</b>"
+TITULO_B = "🅱️ <b>Modo B — aporte do mês</b>"
+NOTA_A = "<i>Venda no STOP GAIN só o que foi comprado pelo modo A.</i>"
+NOTA_B = "<i>Comprar e não vender — o STOP GAIN do modo A não vale aqui.</i>"
+
+
+def bloco_a(msgs):
+    """Bloco do modo A: sinais do dia (ou 'sem sinais')."""
+    if not msgs:
+        return f"{TITULO_A}\nSem sinais hoje."
+    tem_stop = any("STOP GAIN" in m for m in msgs)
+    return "\n\n".join([TITULO_A] + msgs + ([NOTA_A] if tem_stop else []))
+
+
+def bloco_b(precos, ativos):
+    """Bloco do modo B: onde aportar hoje e as 3 seguintes da fila."""
+    ap = aporte_do_mes(precos, ativos)
+    if not ap["ativos"]:
+        return None
+    rk = ap["ranking"]
+    if ap["motivo"] == "comprar":
+        onde = " e ".join(f"<b>{a}</b>" for a in ap["ativos"])
+        dias = ", ".join(f"{a} {dia_txt(int(rk.at[a, 'dia_n']))}" for a in ap["ativos"])
+        motivo = f"COMPRAR hoje ({dias})" + (
+            "; dividir o aporte igualmente" if len(ap["ativos"]) > 1 else "")
+    else:
+        onde = f"<b>{ap['ativos'][0]}</b>"
+        motivo = f"a mais abaixo da média ({em_sigma(rk.at[ap['ativos'][0], 'sigma'])})"
+    seguintes = [a for a in rk.index if a not in ap["ativos"]][:3]
+    fila = " · ".join(f"{a} ({em_sigma(rk.at[a, 'sigma'])})" for a in seguintes)
+    return (f"{TITULO_B}\n💰 Aportar em {onde} — {motivo}\n"
+            f"   seguintes: {fila}\n{NOTA_B}")
+
+
+def ativos_b3_no_dia(precos, dia):
+    return [t for t in precos.columns if t not in FORA_B3 and tem_pregao(precos, t, dia)]
+
+
+def primeiro_pregao_do_mes(precos, dia):
+    """True se `dia` é o primeiro pregão da B3 no mês (pelos próprios dados)."""
+    datas = precos[[t for t in precos.columns if t not in FORA_B3]].dropna(how="all").index
+    return not any(d.month == dia.month and d.year == dia.year and d.date() < dia
+                   for d in datas)
+
+
 def resumo_teste(precos):
-    linhas = ["🧪 <b>Teste do alerta</b> — situação de todos os ativos:"]
+    linhas = ["🧪 <b>Teste do alerta</b> — situação de todos os ativos", TITULO_A]
     for ticker in precos.columns:
         sh = sinal_hoje(precos, ticker)
         data = f" ({sh['data']:%d/%m})"
         msg = texto_sinal(ticker, sh)
-        linhas.append(msg + data if msg
-                      else f"⚪ {ticker}: sem sinal{data} — falta {' e '.join(sh['faltam'])}")
+        if sh["acompanhamento"]:
+            linhas.append(f"👁 {ticker}: só acompanhamento{data}")
+        else:
+            linhas.append(msg + data if msg else
+                          f"⚪ {ticker}: sem sinal{data} — falta {' e '.join(sh['faltam'])}")
+    b = bloco_b(precos, [t for t in precos.columns if t not in FORA_B3])
+    if b:
+        linhas.append(b.replace("aporte do mês</b>",
+                                "aporte do mês</b> (no teste, sempre; de verdade, só no "
+                                "1º pregão do mês)"))
     return "\n\n".join(linhas)
 
 
@@ -144,22 +210,30 @@ def main():
     faltando = b3_sem_pregao(precos, dia)
     b3 = [t for t in precos.columns if t not in FORA_B3]
     sem_b3 = bool(b3) and len(faltando) == len(b3)
+    aporte = False
     if sem_b3:
         # Nenhum ativo da B3 com dado do dia: feriado ou Yahoo ainda sem o fechamento
         ultimo_b3 = max(serie(precos, t).index[-1] for t in b3)
         partes = [f"📭 <b>Sem pregão na B3 em {dia:%d/%m/%Y}</b>\n"
                   f"Feriado ou dados ainda não publicados pelo Yahoo "
-                  f"(B3 até {ultimo_b3:%d/%m/%Y})."] + msgs
+                  f"(B3 até {ultimo_b3:%d/%m/%Y})."]
+        if msgs:                            # (hoje nunca: S&P 500 e dólar não têm sinais)
+            partes.append(bloco_a(msgs))
     else:
-        titulo = "Sinais de" if msgs else "Sem sinais em"
-        partes = [f"📈 <b>{titulo} {dia:%d/%m/%Y}</b>"] + msgs
+        partes = [f"📈 <b>{dia:%d/%m/%Y}</b>", bloco_a(msgs)]
+        if primeiro_pregao_do_mes(precos, dia):
+            b = bloco_b(precos, ativos_b3_no_dia(precos, dia))
+            if b:
+                partes.append(b)
+                aporte = True
     if faltando and not sem_b3:
         partes.append(f"⚠️ Sem o pregão de {dia:%d/%m} no Yahoo: {', '.join(faltando)} "
                       "(sinais desses ativos não avaliados)")
     if aviso:
         partes.append(aviso)
     enviar("\n\n".join(partes) + f"\n\n<a href='{URL_APP}'>Abrir o app</a>")
-    print(f"{dia:%d/%m/%Y}: {len(msgs)} sinal(is) enviado(s)"
+    print(f"{dia:%d/%m/%Y}: {len(msgs)} sinal(is) do modo A"
+          + ("; aporte do mês (modo B)" if aporte else "")
           + ("; sem pregão na B3" if sem_b3 else
              f"; sem pregão: {', '.join(faltando)}" if faltando else "")
           + (f"; {aviso}" if aviso else "") + ".")

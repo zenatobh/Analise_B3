@@ -13,7 +13,7 @@ from plotly.subplots import make_subplots
 
 from analise_ativos import (BANDAS, EMA_FAST, EMA_LONG, EMA_SLOW, JANELA_PLOT,
                             K_SIGMA, K_STOP_GAIN, MMAS, bandas_fixas,
-                            bandas_moveis, difusor, mma, moeda, operacoes, serie)
+                            bandas_moveis, difusor, mma, moeda, operacoes, operavel, serie)
 
 # Cores equivalentes às do matplotlib ("seaborn-v0_8-colorblind")
 COR_PRECO = "#0173B2"
@@ -89,7 +89,9 @@ def fig_ativo(precos, ticker, period=JANELA_PLOT, altura=620, k_gain=K_STOP_GAIN
                       row=1, col=1)
 
     # Operações: faixa verde da entrada à saída, ▲ na entrada, ▼ no stop gain
-    ops = operacoes(precos, ticker, k_gain)
+    # Ativos só de acompanhamento não têm sinais: sem operações nem curvas da regra
+    ops = operacoes(precos, ticker, k_gain) if operavel(ticker) else operacoes(
+        precos, ticker, k_gain).iloc[0:0]
     ini_janela, fim_janela = s.index[0], s.index[-1]
     entradas, saidas = [], []
     for _, op in ops.iterrows():
@@ -117,10 +119,11 @@ def fig_ativo(precos, ticker, period=JANELA_PLOT, altura=620, k_gain=K_STOP_GAIN
     #   teto da entrada (+1σ) sempre; stop gain só durante as operações
     mu, sd = bandas_moveis(s_full)
     mu, sd = mu.loc[ini_janela:], sd.loc[ini_janela:]
-    fig_dados.append(mu + K_SIGMA * sd)
-    fig.add_trace(go.Scatter(x=mu.index, y=mu + K_SIGMA * sd, name="Teto entrada",
-                             showlegend=False, line=dict(color=CINZA_FORTE, dash="dot",
-                                                         width=1)), row=1, col=1)
+    if operavel(ticker):
+        fig_dados.append(mu + K_SIGMA * sd)
+        fig.add_trace(go.Scatter(x=mu.index, y=mu + K_SIGMA * sd, name="Teto entrada",
+                                 showlegend=False, line=dict(color=CINZA_FORTE, dash="dot",
+                                                             width=1)), row=1, col=1)
     em_op = pd.Series(False, index=mu.index)
     for _, op in ops.iterrows():
         em_op.loc[op["entrada"]:(op["saida"] if pd.notna(op["saida"]) else fim_janela)] = True

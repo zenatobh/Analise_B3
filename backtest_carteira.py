@@ -18,6 +18,8 @@ Estratégias:
                         (μ + 1,8σ − preço) / (1,8σ), entre 0 e 2× (1× = preço na média)
     1) Núcleo+satélite— 50% ou 70% do aporte compra o núcleo (BOVA11) todo mês e nunca
                         vende; o resto segue a regra do app nas outras ações
+    Universo das estratégias: as 7 ações (BOVA11 e índices são só acompanhamento, como no
+    app); o BOVA11 (ou IBOV) segue como núcleo da alternativa 1 e como referência.
     2) Dirigido       — o aporte inteiro compra o ativo com COMPRAR no dia (dividido se
                         houver mais de um) ou, sem sinal, o de σ da média mais negativo;
                         nunca vende
@@ -39,7 +41,8 @@ import sys
 import numpy as np
 import pandas as pd
 
-from analise_ativos import K_STOP_GAIN, baixar_precos, bandas_moveis, serie, sinal_compra
+from analise_ativos import (K_STOP_GAIN, baixar_precos, bandas_moveis, operavel, serie,
+                            sinal_compra)
 from backtest import ACOES, CUSTO, INICIO, _cdi_nas_datas, baixar_cdi
 
 APORTE = 1000.0
@@ -330,8 +333,10 @@ def rodar_carteira(periodo="10y", inicio=None, fim=None, nucleo="BOVA11", ir=Tru
     if precos is None:
         tickers = ACOES + (["^BVSP"] if nucleo == "IBOV" else [])
         precos = baixar_precos(tickers, periodo=periodo)
-    universo = [a for a in precos.columns if a != "IBOV"]
-    ativos = universo + (["IBOV"] if nucleo == "IBOV" else [])
+    # Estratégias só com ativos operáveis (como no app); BOVA11/IBOV ficam só como
+    # núcleo da alternativa 1 e referência ("tudo em …")
+    universo = [a for a in precos.columns if operavel(a)]
+    ativos = universo + ([nucleo] if nucleo not in universo else [])
     d = preparar(precos, ativos)
 
     # Avaliação: a partir do 1º pregão com o núcleo e algum ativo do universo prontos

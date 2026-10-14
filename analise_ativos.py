@@ -31,7 +31,15 @@ TICKERS = ["ITUB4", "BBAS3", "PETR4", "VALE3", "ABEV3", "VIVT3", "BBSE3",
            "BOVA11", "^BVSP", "^GSPC", "USDBRL=X"]
 
 NOMES = {"^BVSP": "IBOV", "^GSPC": "SP500", "USDBRL=X": "USDBRL"}
-NAO_ACOES = list(NOMES.values())
+NAO_ACOES = list(NOMES.values())                 # índices e câmbio (fora da aba Resumo)
+# Só acompanhamento: aparecem no app (gráficos, Painel), mas sem sinais de COMPRAR /
+# STOP GAIN e fora do aporte do mês (modo B)
+ACOMPANHAMENTO = NAO_ACOES + ["BOVA11"]
+
+
+def operavel(ticker):
+    """True se o ativo recebe sinais (modo A) e entra no aporte do mês (modo B)."""
+    return ticker not in ACOMPANHAMENTO
 
 DIAS_UTEIS_ANO = 252   # pregões em 12 meses
 JANELA_PLOT = 248      # janela das bandas (μ, σ) e período padrão dos gráficos
@@ -246,6 +254,15 @@ def operacoes(precos, ticker, k_gain=K_STOP_GAIN):
                                          "motivo", "resultado", "dias"])
 
 
+def _dias_seguidos(cond):
+    """Quantos pregões seguidos, terminando no último, a condição vale (0 se não vale hoje)."""
+    cond = np.asarray(cond, bool)
+    if not len(cond) or not cond[-1]:
+        return 0
+    falsos = np.flatnonzero(~cond)
+    return len(cond) - (falsos[-1] + 1 if len(falsos) else 0)
+
+
 def sinal_hoje(precos, ticker, k_gain=K_STOP_GAIN):
     """
     Sinal do último pregão do ativo:
@@ -257,11 +274,16 @@ def sinal_hoje(precos, ticker, k_gain=K_STOP_GAIN):
       dia_n      — "comprar": há quantos pregões seguidos as condições valem (1 = hoje)
       op         — "gain": a operação que fechou hoje (entrada, resultado…)
       faltam     — None: condições de entrada não atendidas hoje
+      acompanhamento — True para ativos só de acompanhamento (sinal sempre None)
     """
     s = serie(precos, ticker)
     mu, sd = bandas_moveis(s)
     preco, data = s.iloc[-1], s.index[-1]
     gain = mu.iloc[-1] + k_gain * sd.iloc[-1]
+    if not operavel(ticker):                 # só acompanhamento: nunca há sinal
+        return {"sinal": None, "data": data, "preco": preco, "stop_gain": gain,
+                "ate_gain": gain / preco - 1, "dia_n": None, "op": None, "faltam": [],
+                "acompanhamento": True}
 
     cond = sinal_compra(precos, ticker)
     ativo = cond["ativo"].to_numpy()
@@ -270,15 +292,12 @@ def sinal_hoje(precos, ticker, k_gain=K_STOP_GAIN):
 
     res = {"sinal": None, "data": data, "preco": preco,
            "stop_gain": gain, "ate_gain": gain / preco - 1,
-           "dia_n": None, "op": None, "faltam": []}
+           "dia_n": None, "op": None, "faltam": [], "acompanhamento": False}
 
     if ult is not None and ult["saida"] == data:
         res.update(sinal=ult["motivo"], op=ult)
     elif ativo[-1]:
-        # Pregões seguidos com as condições valendo, terminando hoje
-        falsos = np.flatnonzero(~ativo)
-        res.update(sinal="comprar",
-                   dia_n=len(ativo) - (falsos[-1] + 1 if len(falsos) else 0))
+        res.update(sinal="comprar", dia_n=_dias_seguidos(ativo))
     else:
         hoje = cond.iloc[-1]
         if not hoje["difusor"]:
@@ -290,7 +309,8 @@ def sinal_hoje(precos, ticker, k_gain=K_STOP_GAIN):
     return res
 
 
-ROTULO_SINAL = {"comprar": "🟢 COMPRAR", "gain": "✅ STOP GAIN", None: "⚪ —"}
+ROTULO_SINAL = {"comprar": "🟢 COMPRAR", "gain": "✅ STOP GAIN", None: "⚪ —",
+                "acompanhamento": "👁 acompanhamento"}
 
 
 def tabela_painel(precos, dias=JANELA_PLOT, k_gain=K_STOP_GAIN):
@@ -309,7 +329,8 @@ def tabela_painel(precos, dias=JANELA_PLOT, k_gain=K_STOP_GAIN):
         comprar = sh["sinal"] == "comprar"
         mu, sd = bandas_fixas(s)
         linhas[ticker] = {
-            "Sinal":    ROTULO_SINAL[sh["sinal"]],
+            "Sinal":    ROTULO_SINAL["acompanhamento" if sh["acompanhamento"]
+                                     else sh["sinal"]],
             "Dia nº":   sh["dia_n"] if comprar else None,
             "Até gain": sh["ate_gain"] if comprar else np.nan,
             "Último":   ultimo,
@@ -323,6 +344,51 @@ def tabela_painel(precos, dias=JANELA_PLOT, k_gain=K_STOP_GAIN):
     painel = pd.DataFrame.from_dict(linhas, orient="index")
     painel["Dia nº"] = painel["Dia nº"].astype("Int64")      # inteiro com vazio
     return painel
+
+
+# ----------------------------------------------------------------------------
+# Modo B — aporte do mês (acumulação: compra uma vez por mês e nunca vende)
+# ----------------------------------------------------------------------------
+# No dia do aporte, entre as ações operáveis (sem os ativos de ACOMPANHAMENTO):
+#   - se algum tem COMPRAR hoje (as três condições de entrada), o aporte vai para ele
+#     (dividido igualmente se houver mais de um);
+#   - senão, vai para o de σ da média mais negativo (o mais abaixo da média de 1 ano).
+# É o "aporte dirigido" do backtest_carteira.py. O STOP GAIN não vale para estas compras.
+
+def ranking_aporte(precos, ativos=None):
+    """
+    Fila do modo B: primeiro os ativos com COMPRAR hoje, depois do mais ao menos
+    abaixo da média (σ da média = (preço − μ)/σ dos últimos JANELA_PLOT pregões).
+    Colunas: comprar, dia_n (pregões seguidos de COMPRAR), sigma, preco, data.
+    """
+    ativos = [a for a in (ativos if ativos is not None else precos.columns)
+              if a in precos.columns and operavel(a)]
+    linhas = {}
+    for a in ativos:
+        s = serie(precos, a)
+        mu, sd = bandas_moveis(s)
+        dia_n = _dias_seguidos(sinal_compra(precos, a)["ativo"].to_numpy())
+        linhas[a] = {"comprar": dia_n > 0, "dia_n": dia_n or None,
+                     "sigma": (s.iloc[-1] - mu.iloc[-1]) / sd.iloc[-1],
+                     "preco": s.iloc[-1], "data": s.index[-1]}
+    rk = pd.DataFrame.from_dict(linhas, orient="index",
+                                columns=["comprar", "dia_n", "sigma", "preco", "data"])
+    return rk.sort_values(["comprar", "sigma"], ascending=[False, True])
+
+
+def aporte_do_mes(precos, ativos=None):
+    """
+    Indicação do modo B para hoje:
+      ativos  — onde aportar (todos os com COMPRAR, dividindo; ou o mais abaixo da média)
+      motivo  — "comprar" ou "desconto"
+      ranking — a fila completa (ranking_aporte)
+    """
+    rk = ranking_aporte(precos, ativos)
+    if rk.empty:
+        return {"ativos": [], "motivo": None, "ranking": rk}
+    if rk["comprar"].any():
+        return {"ativos": list(rk.index[rk["comprar"]]), "motivo": "comprar", "ranking": rk}
+    return {"ativos": [rk.index[0]], "motivo": "desconto", "ranking": rk}
 
 
 # ----------------------------------------------------------------------------
