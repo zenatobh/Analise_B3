@@ -17,6 +17,7 @@ Streamlit: chame as funções de plot com mostrar=False e use a figura retornada
 import re
 from datetime import datetime, time
 from itertools import cycle
+from time import sleep
 from zoneinfo import ZoneInfo
 
 import matplotlib.pyplot as plt
@@ -93,22 +94,43 @@ def _nome(ticker):
     return NOMES.get(ticker, ticker.removesuffix(".SA"))
 
 
-def baixar_precos(tickers=TICKERS, periodo="3y"):
+def _baixar_close(tickers, periodo):
+    """Fechamentos ajustados do Yahoo, uma coluna por ticker (vazia se não vier)."""
+    try:
+        dados = yf.download(tickers, period=periodo, auto_adjust=True,
+                            progress=False, threads=True)
+        close = dados["Close"]
+    except Exception:                       # falha geral do Yahoo / resposta vazia
+        return pd.DataFrame(columns=tickers, dtype=float)
+    if isinstance(close, pd.Series):
+        close = close.to_frame(tickers[0])
+    return close.reindex(columns=tickers)
+
+
+def baixar_precos(tickers=TICKERS, periodo="3y", tentativas=2, espera=3):
     """
     Baixa fechamentos ajustados. Mantém o calendário de cada mercado: linhas só
     são removidas quando TODOS os ativos estão vazios; os NaN de feriados de outros
     mercados são tratados por série em `serie()`.
 
-    Ativos sem dados (falha do Yahoo, ticker inválido) são descartados e listados
-    em `precos.attrs["falhas"]`; só lança erro se nenhum ativo vier.
+    O Yahoo às vezes deixa de devolver um ativo num download em lote; quem vier vazio
+    é baixado de novo sozinho (até `tentativas` vezes, com `espera` segundos antes).
+    Os que ainda assim não vierem são descartados e listados em
+    `precos.attrs["falhas"]`; só lança erro se nenhum ativo vier.
     """
     tickers = normalizar_tickers(tickers)
-    dados = yf.download(tickers, period=periodo, auto_adjust=True,
-                        progress=False, threads=True)["Close"]
-    if isinstance(dados, pd.Series):
-        dados = dados.to_frame(tickers[0])
+    dados = _baixar_close(tickers, periodo)
+    for _ in range(tentativas):
+        vazios = [c for c in tickers if c not in dados or dados[c].isna().all()]
+        if not vazios:
+            break
+        sleep(espera)
+        for tk in vazios:
+            s = _baixar_close([tk], periodo)[tk].dropna()
+            if not s.empty:
+                dados = dados.drop(columns=tk).join(s.rename(tk), how="outer")
+    dados = dados.reindex(columns=tickers)
 
-    dados = dados.reindex(columns=tickers)                 # ticker ausente vira coluna vazia
     vazios = dados.columns[dados.isna().all()].tolist()
     dados = dados.drop(columns=vazios)
     if dados.empty:
