@@ -48,7 +48,7 @@ from backtest import ACOES, CUSTO, INICIO, _cdi_nas_datas, baixar_cdi
 APORTE = 1000.0
 ISENCAO_ACOES = 20_000.0      # vendas de ações no mês até este valor: lucro isento
 ALIQ_RV = 0.15                # IR sobre lucro em ações/ETF (operações comuns)
-ETFS = {"BOVA11", "IBOV"}     # sem isenção dos R$ 20 mil
+ETFS = {"BOVA11", "IBOV", "IVVB11"}   # ETF: sem isenção dos R$ 20 mil
 PESO_MAX = 2.0                # alternativa 3: no máximo 2× a fatia igual
 LIMITE = 0.25                 # dirigido c/ limite: não compra ação com ≥ 25% do investido
 
@@ -188,9 +188,10 @@ def preparar(precos, ativos):
     return d
 
 
-def estrategias(nucleo, universo):
+def estrategias(nucleo, universo, referencias=()):
     sat = [a for a in universo if a != nucleo]
-    return {
+    extras = {f"Tudo em {x}": dict(tipo="dca", pesos={x: 1.0}) for x in referencias}
+    return {**extras, 
         "Regra do app": dict(tipo="regra", peso="igual", universo=universo),
         "3) Regra, peso pelo espaço": dict(tipo="regra", peso="espaco", universo=universo),
         f"1) 50% {nucleo} + 50% regra": dict(tipo="nucleo", frac=0.5, universo=sat),
@@ -252,6 +253,8 @@ def simular(est, d, cal, r_cdi, nucleo, ir=True, aporte=APORTE):
             elif tipo == "dca":
                 alvo = {a: w for a, w in est["pesos"].items() if pd.notna(p_t.get(a, np.nan))}
                 soma = sum(alvo.values())
+                if not alvo:                 # ativo ainda sem cotação: aporte fica no caixa
+                    c.aplicar(t, a_liq)
                 for a, w in alvo.items():
                     c.comprar(a, p_t[a], a_liq * w / soma, i)
             elif tipo == "dirigido":
@@ -325,7 +328,7 @@ def tir(fluxos, data_final, valor_final):
 
 
 def rodar_carteira(periodo="10y", inicio=None, fim=None, nucleo="BOVA11", ir=True,
-                   precos=None, cdi=None, aporte=APORTE):
+                   precos=None, cdi=None, aporte=APORTE, referencias=()):
     """
     Roda todas as estratégias no mesmo período. `inicio`/`fim` (texto 'AAAA-MM-DD')
     recortam a avaliação; os indicadores usam todo o histórico anterior.
@@ -358,7 +361,7 @@ def rodar_carteira(periodo="10y", inicio=None, fim=None, nucleo="BOVA11", ir=Tru
     r_cdi = _cdi_nas_datas(cdi, cal).to_numpy()
 
     linhas, series = {}, {}
-    for nome, est in estrategias(nucleo, universo).items():
+    for nome, est in estrategias(nucleo, universo, referencias).items():
         r = simular(est, d, cal, r_cdi, nucleo, ir=ir, aporte=aporte)
         aportado = sum(v for _, v in r["fluxos"])
         linhas[nome] = {
