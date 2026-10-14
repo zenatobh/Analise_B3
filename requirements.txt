@@ -1,6 +1,10 @@
-streamlit>=1.50
-plotly>=5.22
-yfinance>=0.2.40
-pandas>=2.0
-numpy>=1.24
-matplotlib>=3.6
+# Versões travadas (testadas em 13/10/2026) para app e alerta usarem as mesmas.
+# yfinance fica livre dentro da 1.x: quando o Yahoo muda algo, só a versão nova resolve.
+# Para atualizar: troque o número, suba o arquivo e faça Reboot app; rode o teste do alerta.
+streamlit==1.65.0
+plotly==7.1.0
+yfinance>=1.7.0,<2
+pandas==3.0.5
+numpy==2.5.3
+matplotlib==3.11.2
+requests==2.34.2

@@ -1,7 +1,7 @@
 """
 alerta.py — envia pelo Telegram os sinais do pregão do dia.
 
-Roda de segunda a sexta às 19h30 pelo GitHub Actions (.github/workflows/alerta.yml),
+Roda de segunda a sexta às 19h47 pelo GitHub Actions (.github/workflows/alerta.yml),
 com a mesma regra do app (analise_ativos.sinal_hoje), então alerta e app não divergem.
 
 A mensagem separa as duas estratégias:
@@ -13,7 +13,7 @@ A mensagem separa as duas estratégias:
     IVVB11 não gera sinal do modo A, mas concorre no aporte do mês (modo B).
     🅱️ Modo B — aporte do mês (só no 1º pregão de cada mês na B3):
         💰 onde aportar: COMPRAR hoje (dividindo) ou o mais abaixo da média; nunca vende
-Pregão de referência = data de 12 h atrás (Brasília): a execução das 19h30 aponta
+Pregão de referência = data de 12 h atrás (Brasília): a execução das 19h47 aponta
 para o próprio dia e uma execução que o GitHub atrase para a madrugada continua
 apontando para o pregão certo. Ativos sem dado nessa data ficam de fora, para não
 repetir sinais do dia anterior; os da B3 nessa situação são avisados na mensagem.
