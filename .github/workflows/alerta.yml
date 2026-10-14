@@ -1,14 +1,15 @@
 # Alerta diário de entradas e saídas pelo Telegram.
-# Roda de segunda a sexta às 19h30 (horário de Brasília = 22h30 UTC), depois do
-# fechamento da B3. O GitHub pode atrasar execuções agendadas em várias horas; o
-# alerta.py avalia sempre o pregão de 12 h atrás, então o atraso não perde o dia.
-# Toda execução envia mensagem (sinais, "sem sinais" ou "sem pregão"): silêncio no
-# Telegram significa que o alerta não rodou.
+# Roda de segunda a sexta às 19h47 (horário de Brasília = 22h47 UTC), depois do
+# fechamento da B3. Minuto "quebrado" de propósito: o GitHub atrasa mais os agendamentos
+# em :00 e :30. Mesmo atrasando várias horas, o alerta.py avalia o pregão de 12 h atrás,
+# então o atraso não perde o dia.
+# Toda execução envia mensagem (sinais, "sem sinais" ou "sem pregão"); se a execução
+# falhar, um aviso vai para o Telegram com o link da execução.
 name: Alerta de operações
 
 on:
   schedule:
-    - cron: "30 22 * * 1-5"
+    - cron: "47 22 * * 1-5"
   workflow_dispatch:
     inputs:
       teste:
@@ -28,11 +29,26 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Instalar dependências
-        run: pip install yfinance pandas numpy matplotlib requests
+      - name: Instalar dependências (mesmas versões do app)
+        run: pip install -r requirements.txt
 
       - name: Verificar e enviar alertas
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python alerta.py ${{ (github.event_name == 'workflow_dispatch' && inputs.teste) && '--teste' || '' }}
+
+      - name: Avisar falha no Telegram
+        if: failure()
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          LINK: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # tr: remove espaços/quebras de linha coladas no segredo (já causou 404)
+          TOKEN=$(printf '%s' "$TELEGRAM_TOKEN" | tr -d '[:space:]')
+          CHAT=$(printf '%s' "$TELEGRAM_CHAT_ID" | tr -d '[:space:]')
+          curl -sS -o /dev/null -w "Telegram: HTTP %{http_code}\n" \
+            "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${CHAT}" \
+            --data-urlencode "text=⚠️ O alerta de operações FALHOU hoje — os sinais não foram avaliados. Detalhes: ${LINK}"
