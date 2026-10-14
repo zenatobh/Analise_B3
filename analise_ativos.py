@@ -14,6 +14,7 @@ Notebook:
 
 Streamlit: chame as funções de plot com mostrar=False e use a figura retornada.
 """
+import os
 import re
 from datetime import datetime, time
 from itertools import cycle
@@ -23,6 +24,7 @@ from zoneinfo import ZoneInfo
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import requests
 import yfinance as yf
 
 # ----------------------------------------------------------------------------
@@ -107,7 +109,7 @@ def _baixar_close(tickers, periodo):
     return close.reindex(columns=tickers)
 
 
-def baixar_precos(tickers=TICKERS, periodo="3y", tentativas=2, espera=3):
+def baixar_precos(tickers=TICKERS, periodo="3y", tentativas=2, espera=3, usar_reserva=True):
     """
     Baixa fechamentos ajustados. Mantém o calendário de cada mercado: linhas só
     são removidas quando TODOS os ativos estão vazios; os NaN de feriados de outros
@@ -117,6 +119,8 @@ def baixar_precos(tickers=TICKERS, periodo="3y", tentativas=2, espera=3):
     é baixado de novo sozinho (até `tentativas` vezes, com `espera` segundos antes).
     Os que ainda assim não vierem são descartados e listados em
     `precos.attrs["falhas"]`; só lança erro se nenhum ativo vier.
+    Com BRAPI_TOKEN definido, completa o pregão de hoje que faltar (ver
+    completar_com_reserva); os completados ficam em `precos.attrs["reserva"]`.
     """
     tickers = normalizar_tickers(tickers)
     dados = _baixar_close(tickers, periodo)
@@ -140,7 +144,72 @@ def baixar_precos(tickers=TICKERS, periodo="3y", tentativas=2, espera=3):
                    .dropna(how="all")
                    .sort_index())
     precos.attrs["falhas"] = [_nome(t) for t in vazios]
+    return completar_com_reserva(precos) if usar_reserva else precos
+
+
+# ----------------------------------------------------------------------------
+# Reserva para a cotação do dia (brapi.dev)
+# ----------------------------------------------------------------------------
+# O histórico vem sempre do Yahoo (ajustado, anos de dados). Quando um ativo da B3 vem
+# sem o pregão de hoje (Yahoo atrasado), a brapi completa só o último dia. Requer a
+# variável de ambiente BRAPI_TOKEN (conta grátis em brapi.dev); sem ela, nada muda.
+# O fechamento mais recente é igual no preço ajustado e no nominal (o ajuste do Yahoo
+# só altera o passado); exceção: no dia "ex" de um provento o histórico ainda não está
+# ajustado.
+BRAPI_URL = "https://brapi.dev/api/v2/stocks/quote"
+FORA_DA_B3 = {"SP500", "USDBRL", "IBOV"}      # índices/câmbio: a reserva não cobre
+
+
+def _cotacao_brapi(ticker, token, timeout=15):
+    """(preço, data em Brasília) da brapi para um ticker da B3, ou None."""
+    r = requests.get(BRAPI_URL, params={"symbols": ticker}, timeout=timeout,
+                     headers={"Authorization": f"Bearer {token}"})
+    r.raise_for_status()
+    resultados = r.json().get("results") or []
+    dados = (resultados[0] or {}).get("data") if resultados else None
+    if not dados or dados.get("regularMarketPrice") is None or not dados.get("regularMarketTime"):
+        return None
+    quando = pd.Timestamp(dados["regularMarketTime"])
+    quando = quando.tz_localize("UTC") if quando.tzinfo is None else quando
+    return float(dados["regularMarketPrice"]), quando.tz_convert(FUSO).date()
+
+
+def completar_com_reserva(precos, token=None, agora=None):
+    """
+    Acrescenta o pregão de hoje (dia útil) aos ativos da B3 que o Yahoo trouxe sem ele,
+    com o preço da brapi. Lista os completados em `precos.attrs["reserva"]`. Falhas da
+    brapi são ignoradas (fica como veio do Yahoo).
+    """
+    precos.attrs.setdefault("reserva", [])
+    token = (token if token is not None else os.environ.get("BRAPI_TOKEN", "")).strip()
+    agora = agora or datetime.now(FUSO)
+    if not token or agora.weekday() >= 5:
+        return precos
+    hoje = agora.date()
+    attrs = dict(precos.attrs)                       # guardar antes de mexer no índice
+    completados = []
+    for tk in [c for c in precos.columns if c not in FORA_DA_B3]:
+        ultimo = precos[tk].dropna().index[-1].date()
+        if ultimo >= hoje:
+            continue
+        try:
+            cot = _cotacao_brapi(tk, token)
+        except (requests.RequestException, ValueError, KeyError, TypeError) as e:
+            print(f"Reserva (brapi) indisponível para {tk}: {e}")
+            continue
+        if cot and ultimo < cot[1] <= hoje:          # só um pregão mais novo que o Yahoo
+            precos.loc[pd.Timestamp(cot[1]), tk] = cot[0]
+            completados.append(tk)
+    if completados:
+        precos = precos.sort_index()
+        precos.attrs.update(attrs)
+        precos.attrs["reserva"] = completados
     return precos
+
+
+def reserva(precos):
+    """Ativos cujo último pregão veio da brapi (lista vazia se nenhum)."""
+    return list(precos.attrs.get("reserva", []))
 
 
 def falhas(precos):

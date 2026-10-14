@@ -24,6 +24,7 @@ B3" —, então silêncio no Telegram significa que o alerta não rodou.
 Variáveis de ambiente (segredos do repositório no GitHub):
     TELEGRAM_TOKEN    token do bot (BotFather)
     TELEGRAM_CHAT_ID  id do chat que recebe as mensagens
+    BRAPI_TOKEN       opcional: reserva da cotação do dia quando o Yahoo atrasa
 
 Uso:
     python alerta.py            # sinais do pregão de referência (sempre envia mensagem)
@@ -37,7 +38,8 @@ from datetime import datetime, timedelta
 import requests
 
 from analise_ativos import (FUSO, K_STOP_GAIN, SO_MODO_B, TICKERS, aporte_do_mes,
-                            baixar_precos, falhas, moeda, serie, sinal_hoje)
+                            baixar_precos, falhas, moeda, no_modo_b, reserva, serie,
+                            sinal_hoje)
 
 URL_APP = "https://ativos-b3.streamlit.app"   # ajuste se o endereço do app for outro
 
@@ -187,8 +189,10 @@ def resumo_teste(precos):
 
 
 def aviso_falhas(precos):
-    f = falhas(precos)
-    return f"⚠️ Sem dados do Yahoo para: {', '.join(f)}" if f else ""
+    f, r = falhas(precos), reserva(precos)
+    partes = ([f"⚠️ Sem dados do Yahoo para: {', '.join(f)}"] if f else []) + (
+        [f"ℹ️ Pregão de hoje via brapi (o Yahoo ainda não tinha): {', '.join(r)}"] if r else [])
+    return "\n".join(partes)
 
 
 def b3_sem_pregao(precos, dia):
@@ -228,8 +232,9 @@ def main():
             if b:
                 partes.append(b)
                 aporte = True
-    if faltando and not sem_b3:
-        partes.append(f"⚠️ Sem o pregão de {dia:%d/%m} no Yahoo: {', '.join(faltando)} "
+    faltando_sinais = [t for t in faltando if no_modo_b(t)]    # IBOV não tem sinais
+    if faltando_sinais and not sem_b3:
+        partes.append(f"⚠️ Sem o pregão de {dia:%d/%m} no Yahoo: {', '.join(faltando_sinais)} "
                       "(sinais desses ativos não avaliados)")
     if aviso:
         partes.append(aviso)

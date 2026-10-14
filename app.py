@@ -4,6 +4,8 @@ app.py — painel de ativos para celular (Streamlit + Plotly).
 Local:   streamlit run app.py
 Deploy:  Streamlit Community Cloud apontando para este arquivo.
 """
+import os
+
 import pandas as pd
 import streamlit as st
 
@@ -11,10 +13,19 @@ from analise_ativos import (HORA_CONSOLIDADO, JANELA_PLOT, K_SIGMA, K_STOP_GAIN,
                             ACOMPANHAMENTO, MMA_LENTA, MMA_RAPIDA, NAO_ACOES, SO_MODO_B,
                             TICKERS, aporte_do_mes, sinal_compra,
                             bandas_fixas, base_12m, baixar_precos, falhas, moeda,
-                            provisorio, serie, sinal_hoje, tabela_painel, tabela_resumo)
+                            provisorio, reserva, serie, sinal_hoje, tabela_painel,
+                            tabela_resumo)
 from graficos_plotly import aplicar_zoom, config_zoom, fig_ativo, fig_hist
 
 st.set_page_config(page_title="Ativos B3", page_icon="📈", layout="centered")
+
+# Token da brapi (reserva para a cotação do dia), dos segredos do Streamlit Cloud:
+# Manage app → Settings → Secrets →  BRAPI_TOKEN = "..."   (sem ele, a reserva fica desligada)
+try:
+    if st.secrets.get("BRAPI_TOKEN"):
+        os.environ["BRAPI_TOKEN"] = str(st.secrets["BRAPI_TOKEN"]).strip()
+except Exception:            # sem arquivo de segredos: segue sem reserva
+    pass
 
 # Períodos exibidos no gráfico principal (em pregões)
 PERIODOS = {"1M": 21, "3M": 63, "6M": 126, "1A": 248, "2A": 504, "Tudo": None}
@@ -79,6 +90,10 @@ if falhas(precos):
     st.warning(f"Sem dados do Yahoo para: {', '.join(falhas(precos))}. "
                "Os demais ativos estão atualizados; toque em ↻ para tentar de novo.",
                icon="⚠️")
+
+if reserva(precos):
+    st.caption(f"ℹ️ Pregão de hoje via brapi (o Yahoo ainda não tinha): "
+               f"{', '.join(reserva(precos))}.")
 
 topo_esq, topo_dir = st.columns([3, 1])
 topo_esq.caption(f"Dados até {precos.index[-1]:%d/%m/%Y}")
