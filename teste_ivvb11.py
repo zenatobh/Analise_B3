@@ -28,7 +28,7 @@ def _pct(v, sinal=True):
 
 def rodar(precos=None, cdi=None):
     if precos is None:
-        precos = baixar_precos(bt.ACOES + ["IVVB11"], periodo="max")
+        precos = baixar_precos(list(dict.fromkeys(bt.ACOES + ["IVVB11"])), periodo="max")
     if "IVVB11" not in precos.columns:
         raise SystemExit("Sem dados do IVVB11 no Yahoo; tente de novo mais tarde.")
     if cdi is None:

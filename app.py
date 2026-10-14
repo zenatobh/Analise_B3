@@ -8,8 +8,8 @@ import pandas as pd
 import streamlit as st
 
 from analise_ativos import (HORA_CONSOLIDADO, JANELA_PLOT, K_SIGMA, K_STOP_GAIN,
-                            ACOMPANHAMENTO, MMA_LENTA, MMA_RAPIDA, NAO_ACOES, TICKERS,
-                            aporte_do_mes,
+                            ACOMPANHAMENTO, MMA_LENTA, MMA_RAPIDA, NAO_ACOES, SO_MODO_B,
+                            TICKERS, aporte_do_mes, sinal_compra,
                             bandas_fixas, base_12m, baixar_precos, falhas, moeda,
                             provisorio, serie, sinal_hoje, tabela_painel, tabela_resumo)
 from graficos_plotly import aplicar_zoom, config_zoom, fig_ativo, fig_hist
@@ -22,9 +22,10 @@ PERIODO_PADRAO = "1A"
 
 
 @st.cache_data(ttl=60 * 60, show_spinner="Baixando cotações…")
-def carregar():
-    """Baixa uma vez por hora; todos os acessos reutilizam o cache."""
-    return baixar_precos(TICKERS)
+def carregar(tickers):
+    """Baixa uma vez por hora; todos os acessos reutilizam o cache. A lista de ativos faz
+    parte da chave do cache: mudou TICKERS, baixa de novo sem precisar do ↻."""
+    return baixar_precos(list(tickers))
 
 
 def mostrar_fig(fig, zoom=False):
@@ -66,7 +67,7 @@ def cor_variacao(v):
 # Dados
 # ----------------------------------------------------------------------------
 try:
-    precos = carregar()
+    precos = carregar(tuple(TICKERS))
 except Exception as e:  # rede, rate limit do Yahoo, ticker inválido
     st.error(f"Não foi possível baixar as cotações: {e}")
     if st.button("Tentar novamente"):
@@ -122,7 +123,12 @@ with aba_ativo:
 
     # Sinal do dia: STOP GAIN prevalece sobre COMPRAR
     sh = sinal_hoje(precos, ticker, k_gain)
-    if sh["acompanhamento"]:
+    if sh["acompanhamento"] and ticker in SO_MODO_B:
+        cond = bool(sinal_compra(precos, ticker)["ativo"].iloc[-1])
+        st.info("**Só no aporte do mês (modo B)** — sem sinais do modo A.  \n"
+                "Condições de COMPRAR hoje: "
+                + ("**sim** (tem prioridade no aporte)" if cond else "não"), icon="👁")
+    elif sh["acompanhamento"]:
         st.info("**Só acompanhamento** — sem sinais de compra (modos A e B).", icon="👁")
     elif sh["sinal"] == "comprar":
         st.success(f"**COMPRAR** · {dia_txt(sh['dia_n'])} · preço {moeda(sh['preco'])}  \n"
@@ -177,7 +183,8 @@ with aba_painel:
     st.caption(f"**Modo A** — entrada no COMPRAR (difusor short > long, "
                f"MMA{MMA_RAPIDA} > MMA{MMA_LENTA} e preço abaixo de {sigma(K_SIGMA)}); "
                f"saída no stop gain {sigma(k_gain)} (sem stop loss); fora das operações, "
-               f"CDI. 👁 = só acompanhamento, sem sinais ({', '.join(ACOMPANHAMENTO)}). "
+               f"CDI. 👁 = sem sinais do modo A ({', '.join(ACOMPANHAMENTO)}); "
+               f"{', '.join(SO_MODO_B)} entra só no aporte do mês (modo B). "
                f"Faixa, média e σ dos últimos {JANELA_PLOT} pregões. "
                "Toque no nome de uma coluna para ordenar.")
     prov = [a for a in painel.index if provisorio(precos, a)]
@@ -217,8 +224,9 @@ with aba_painel:
 # ----------------------------------------------------------------------------
 with aba_resumo:
     dias = st.number_input("Últimos N pregões", 20, 750, 496, step=20)
-    incluir_etf = st.toggle("Incluir BOVA11", value=True)
-    excluir = NAO_ACOES if incluir_etf else NAO_ACOES + ["BOVA11"]
+    etfs = [a for a in ("BOVA11", *SO_MODO_B) if a in precos.columns]
+    incluir_etf = st.toggle(f"Incluir ETFs ({', '.join(etfs)})", value=True)
+    excluir = NAO_ACOES if incluir_etf else NAO_ACOES + etfs
 
     resumo = tabela_resumo(precos, dias=int(dias), excluir=excluir)
     # Estatísticas nas linhas, uma coluna por ação; números no formato brasileiro

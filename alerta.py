@@ -10,6 +10,7 @@ A mensagem separa as duas estratégias:
         ✅ STOP GAIN   — a operação fechou acima de μ + 1,8σ hoje (não há stop loss);
                          vale só para o que foi comprado pelo modo A
     IBOV, S&P 500, dólar e BOVA11 são só acompanhamento: nunca geram sinal.
+    IVVB11 não gera sinal do modo A, mas concorre no aporte do mês (modo B).
     🅱️ Modo B — aporte do mês (só no 1º pregão de cada mês na B3):
         💰 onde aportar: COMPRAR hoje (dividindo) ou o mais abaixo da média; nunca vende
 Pregão de referência = data de 12 h atrás (Brasília): a execução das 19h30 aponta
@@ -35,8 +36,8 @@ from datetime import datetime, timedelta
 
 import requests
 
-from analise_ativos import (FUSO, K_STOP_GAIN, TICKERS, aporte_do_mes, baixar_precos,
-                            falhas, moeda, serie, sinal_hoje)
+from analise_ativos import (FUSO, K_STOP_GAIN, SO_MODO_B, TICKERS, aporte_do_mes,
+                            baixar_precos, falhas, moeda, serie, sinal_hoje)
 
 URL_APP = "https://ativos-b3.streamlit.app"   # ajuste se o endereço do app for outro
 
@@ -172,7 +173,8 @@ def resumo_teste(precos):
         data = f" ({sh['data']:%d/%m})"
         msg = texto_sinal(ticker, sh)
         if sh["acompanhamento"]:
-            linhas.append(f"👁 {ticker}: só acompanhamento{data}")
+            linhas.append(f"👁 {ticker}: " + ("só no aporte do mês (modo B)"
+                          if ticker in SO_MODO_B else "só acompanhamento") + data)
         else:
             linhas.append(msg + data if msg else
                           f"⚪ {ticker}: sem sinal{data} — falta {' e '.join(sh['faltam'])}")

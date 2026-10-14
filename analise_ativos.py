@@ -28,18 +28,26 @@ import yfinance as yf
 # Configuração
 # ----------------------------------------------------------------------------
 TICKERS = ["ITUB4", "BBAS3", "PETR4", "VALE3", "ABEV3", "VIVT3", "BBSE3",
-           "BOVA11", "^BVSP", "^GSPC", "USDBRL=X"]
+           "BOVA11", "IVVB11", "^BVSP", "^GSPC", "USDBRL=X"]
 
 NOMES = {"^BVSP": "IBOV", "^GSPC": "SP500", "USDBRL=X": "USDBRL"}
 NAO_ACOES = list(NOMES.values())                 # índices e câmbio (fora da aba Resumo)
-# Só acompanhamento: aparecem no app (gráficos, Painel), mas sem sinais de COMPRAR /
-# STOP GAIN e fora do aporte do mês (modo B)
-ACOMPANHAMENTO = NAO_ACOES + ["BOVA11"]
+# Só no aporte do mês (modo B): concorrem na fila do aporte, mas sem sinais do modo A.
+# IVVB11: no teste (13/10/2026) a regra do modo A não combinou com ele (poucas entradas,
+# perde muito para comprar e segurar), mas no modo B melhorou retorno e queda.
+SO_MODO_B = ["IVVB11"]
+# Sem sinais de COMPRAR / STOP GAIN (modo A): aparecem no app (gráficos, Painel)
+ACOMPANHAMENTO = NAO_ACOES + ["BOVA11"] + SO_MODO_B
 
 
 def operavel(ticker):
-    """True se o ativo recebe sinais (modo A) e entra no aporte do mês (modo B)."""
+    """True se o ativo recebe sinais do modo A (COMPRAR / STOP GAIN)."""
     return ticker not in ACOMPANHAMENTO
+
+
+def no_modo_b(ticker):
+    """True se o ativo concorre no aporte do mês (modo B)."""
+    return operavel(ticker) or ticker in SO_MODO_B
 
 DIAS_UTEIS_ANO = 252   # pregões em 12 meses
 JANELA_PLOT = 248      # janela das bandas (μ, σ) e período padrão dos gráficos
@@ -310,7 +318,7 @@ def sinal_hoje(precos, ticker, k_gain=K_STOP_GAIN):
 
 
 ROTULO_SINAL = {"comprar": "🟢 COMPRAR", "gain": "✅ STOP GAIN", None: "⚪ —",
-                "acompanhamento": "👁 acompanhamento"}
+                "acompanhamento": "👁 acompanhamento", "so_b": "👁 só no aporte (B)"}
 
 
 def tabela_painel(precos, dias=JANELA_PLOT, k_gain=K_STOP_GAIN):
@@ -329,8 +337,8 @@ def tabela_painel(precos, dias=JANELA_PLOT, k_gain=K_STOP_GAIN):
         comprar = sh["sinal"] == "comprar"
         mu, sd = bandas_fixas(s)
         linhas[ticker] = {
-            "Sinal":    ROTULO_SINAL["acompanhamento" if sh["acompanhamento"]
-                                     else sh["sinal"]],
+            "Sinal":    ROTULO_SINAL[("so_b" if ticker in SO_MODO_B else "acompanhamento")
+                                     if sh["acompanhamento"] else sh["sinal"]],
             "Dia nº":   sh["dia_n"] if comprar else None,
             "Até gain": sh["ate_gain"] if comprar else np.nan,
             "Último":   ultimo,
@@ -349,7 +357,7 @@ def tabela_painel(precos, dias=JANELA_PLOT, k_gain=K_STOP_GAIN):
 # ----------------------------------------------------------------------------
 # Modo B — aporte do mês (acumulação: compra uma vez por mês e nunca vende)
 # ----------------------------------------------------------------------------
-# No dia do aporte, entre as ações operáveis (sem os ativos de ACOMPANHAMENTO):
+# No dia do aporte, entre as ações operáveis e os ativos de SO_MODO_B (IVVB11):
 #   - se algum tem COMPRAR hoje (as três condições de entrada), o aporte vai para ele
 #     (dividido igualmente se houver mais de um);
 #   - senão, vai para o de σ da média mais negativo (o mais abaixo da média de 1 ano).
@@ -362,7 +370,7 @@ def ranking_aporte(precos, ativos=None):
     Colunas: comprar, dia_n (pregões seguidos de COMPRAR), sigma, preco, data.
     """
     ativos = [a for a in (ativos if ativos is not None else precos.columns)
-              if a in precos.columns and operavel(a)]
+              if a in precos.columns and no_modo_b(a)]
     linhas = {}
     for a in ativos:
         s = serie(precos, a)

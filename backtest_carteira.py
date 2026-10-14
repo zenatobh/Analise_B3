@@ -18,8 +18,9 @@ Estratégias:
                         (μ + 1,8σ − preço) / (1,8σ), entre 0 e 2× (1× = preço na média)
     1) Núcleo+satélite— 50% ou 70% do aporte compra o núcleo (BOVA11) todo mês e nunca
                         vende; o resto segue a regra do app nas outras ações
-    Universo das estratégias: as 7 ações (BOVA11 e índices são só acompanhamento, como no
-    app); o BOVA11 (ou IBOV) segue como núcleo da alternativa 1 e como referência.
+    Universo das estratégias: modo A (regra) = as 7 ações; modo B (dirigido) = as 7 ações
+    + IVVB11 (SO_MODO_B, quando houver cotação); BOVA11 (ou IBOV) segue como núcleo da
+    alternativa 1 e como referência, como no app.
     2) Dirigido       — o aporte inteiro compra o ativo com COMPRAR no dia (dividido se
                         houver mais de um) ou, sem sinal, o de σ da média mais negativo;
                         nunca vende
@@ -41,8 +42,8 @@ import sys
 import numpy as np
 import pandas as pd
 
-from analise_ativos import (K_STOP_GAIN, baixar_precos, bandas_moveis, operavel, serie,
-                            sinal_compra)
+from analise_ativos import (K_STOP_GAIN, baixar_precos, bandas_moveis, no_modo_b, operavel,
+                            serie, sinal_compra)
 from backtest import ACOES, CUSTO, INICIO, _cdi_nas_datas, baixar_cdi
 
 APORTE = 1000.0
@@ -188,16 +189,17 @@ def preparar(precos, ativos):
     return d
 
 
-def estrategias(nucleo, universo, referencias=()):
+def estrategias(nucleo, universo, referencias=(), universo_b=None):
     sat = [a for a in universo if a != nucleo]
+    universo_b = universo_b or universo
     extras = {f"Tudo em {x}": dict(tipo="dca", pesos={x: 1.0}) for x in referencias}
     return {**extras, 
         "Regra do app": dict(tipo="regra", peso="igual", universo=universo),
         "3) Regra, peso pelo espaço": dict(tipo="regra", peso="espaco", universo=universo),
         f"1) 50% {nucleo} + 50% regra": dict(tipo="nucleo", frac=0.5, universo=sat),
         f"1) 70% {nucleo} + 30% regra": dict(tipo="nucleo", frac=0.7, universo=sat),
-        "2) Aporte dirigido": dict(tipo="dirigido", universo=universo),
-        "2) Dirigido, limite 25%": dict(tipo="dirigido", universo=universo, limite=LIMITE),
+        "2) Aporte dirigido": dict(tipo="dirigido", universo=universo_b),
+        "2) Dirigido, limite 25%": dict(tipo="dirigido", universo=universo_b, limite=LIMITE),
         f"Tudo em {nucleo}": dict(tipo="dca", pesos={nucleo: 1.0}),
         "Tudo no CDI": dict(tipo="cdi"),
         "1/N em cada ação (teórico)": dict(tipo="dca", pesos={a: 1.0 for a in universo
@@ -338,12 +340,13 @@ def rodar_carteira(periodo="10y", inicio=None, fim=None, nucleo="BOVA11", ir=Tru
         precos = baixar_precos(tickers, periodo=periodo)
     # Estratégias só com ativos operáveis (como no app); BOVA11/IBOV ficam só como
     # núcleo da alternativa 1 e referência ("tudo em …")
-    universo = [a for a in precos.columns if operavel(a)]
-    ativos = universo + ([nucleo] if nucleo not in universo else [])
+    universo = [a for a in precos.columns if operavel(a)]                 # modo A
+    universo_b = [a for a in precos.columns if no_modo_b(a)]              # modo B (+IVVB11)
+    ativos = list(dict.fromkeys(universo_b + [nucleo]))
     d = preparar(precos, ativos)
 
     # Avaliação: a partir do 1º pregão com o núcleo e algum ativo do universo prontos
-    ok = d["pronto"][nucleo] & d["pronto"][universo].any(axis=1)
+    ok = d["pronto"][nucleo] & d["pronto"][universo].any(axis=1)          # IVVB11 entra quando pronto
     cal = precos.index[ok.to_numpy()]
     if inicio:
         cal = cal[cal >= pd.Timestamp(inicio)]
@@ -361,7 +364,7 @@ def rodar_carteira(periodo="10y", inicio=None, fim=None, nucleo="BOVA11", ir=Tru
     r_cdi = _cdi_nas_datas(cdi, cal).to_numpy()
 
     linhas, series = {}, {}
-    for nome, est in estrategias(nucleo, universo, referencias).items():
+    for nome, est in estrategias(nucleo, universo, referencias, universo_b).items():
         r = simular(est, d, cal, r_cdi, nucleo, ir=ir, aporte=aporte)
         aportado = sum(v for _, v in r["fluxos"])
         linhas[nome] = {
