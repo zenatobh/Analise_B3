@@ -1,0 +1,27 @@
+# Mantém o agendamento do alerta ativo.
+# O GitHub desliga workflows agendados de repositórios sem commits há 60 dias. Este
+# workflow faz um commit vazio no dia 1º de cada mês (09h17 de Brasília), o que conta
+# como atividade. O Streamlit reinicia o app a cada commit — sem efeito para o usuário.
+name: Manter agendamento ativo
+
+on:
+  schedule:
+    - cron: "17 12 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  manter:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Commit vazio
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "Manter agendamento ativo ($(date -u +%Y-%m))"
+          git push
