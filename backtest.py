@@ -128,7 +128,7 @@ def _baixar_cdi_diario(inicio, fim, cache):
             novos.append(_baixar_taxas(taxa.index[-1] + pd.Timedelta(days=1), fim))
     novos = [n for n in novos if not n.empty]
     if novos:
-        taxa = pd.concat([taxa] + novos)
+        taxa = pd.concat(([taxa] if not taxa.empty else []) + novos)
         taxa = taxa[~taxa.index.duplicated()].sort_index()
         if cache:
             taxa.rename("cdi").to_csv(cache)

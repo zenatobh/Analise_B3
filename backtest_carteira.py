@@ -21,6 +21,9 @@ Estratégias:
     2) Dirigido       — o aporte inteiro compra o ativo com COMPRAR no dia (dividido se
                         houver mais de um) ou, sem sinal, o de σ da média mais negativo;
                         nunca vende
+    2) c/ limite      — idem, mas ação que já recebeu 25% ou mais do dinheiro investido
+                        fica fora da escolha (limite pelo custo, não pelo valor de mercado:
+                        ação em queda perde peso e seguiria sendo comprada); nada é vendido
     Referências       — tudo no núcleo todo mês; tudo no CDI; 1/N em cada ação (teórico)
 
 Uso no Colab (pasta Analise_B3, com analise_ativos.py e backtest.py):
@@ -44,6 +47,7 @@ ISENCAO_ACOES = 20_000.0      # vendas de ações no mês até este valor: lucro
 ALIQ_RV = 0.15                # IR sobre lucro em ações/ETF (operações comuns)
 ETFS = {"BOVA11", "IBOV"}     # sem isenção dos R$ 20 mil
 PESO_MAX = 2.0                # alternativa 3: no máximo 2× a fatia igual
+LIMITE = 0.25                 # dirigido c/ limite: não compra ação com ≥ 25% do investido
 
 
 def aliquota_rf(dias):
@@ -189,6 +193,7 @@ def estrategias(nucleo, universo):
         f"1) 50% {nucleo} + 50% regra": dict(tipo="nucleo", frac=0.5, universo=sat),
         f"1) 70% {nucleo} + 30% regra": dict(tipo="nucleo", frac=0.7, universo=sat),
         "2) Aporte dirigido": dict(tipo="dirigido", universo=universo),
+        "2) Dirigido, limite 25%": dict(tipo="dirigido", universo=universo, limite=LIMITE),
         f"Tudo em {nucleo}": dict(tipo="dca", pesos={nucleo: 1.0}),
         "Tudo no CDI": dict(tipo="cdi"),
         "1/N em cada ação (teórico)": dict(tipo="dca", pesos={a: 1.0 for a in universo
@@ -248,6 +253,14 @@ def simular(est, d, cal, r_cdi, nucleo, ir=True, aporte=APORTE):
                     c.comprar(a, p_t[a], a_liq * w / soma, i)
             elif tipo == "dirigido":
                 cand = disponiveis(i, universo)
+                investido = sum(custo for _, custo, _ in c.pos.values())
+                if est.get("limite") and investido > 0:
+                    # Limite pelo DINHEIRO INVESTIDO (custo), não pelo valor de mercado:
+                    # uma ação em queda perde peso de mercado e continuaria sendo comprada.
+                    # Só ações abaixo do limite; se todas estiverem acima, a de menor peso.
+                    peso = {a: (c.pos[a][1] / investido if a in c.pos else 0.0) for a in cand}
+                    cand = ([a for a in cand if peso[a] < est["limite"]]
+                            or ([min(cand, key=peso.get)] if cand else []))
                 sinais = [a for a in cand if ativo.at[t, a]]
                 if sinais:
                     for a in sinais:
@@ -394,6 +407,16 @@ def mostrar_carteira(res):
           "patrimônio no CDI.")
 
 
+def concentracao(res, nome="2) Aporte dirigido"):
+    """Quanto do aportado foi para cada ativo numa estratégia (e em quantos meses)."""
+    o = res["series"][nome]["ordens"]
+    o = o[o["ordem"] == "compra"]
+    tab = o.groupby("ativo")["valor"].agg(["sum", "count"]).rename(
+        columns={"sum": "valor", "count": "compras"}).sort_values("valor", ascending=False)
+    tab["% do aportado"] = tab["valor"] / tab["valor"].sum()
+    return tab
+
+
 def plot_carteira(res, nomes=None):
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots(figsize=(14, 6))
@@ -412,7 +435,12 @@ def plot_carteira(res, nomes=None):
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "2007":
-        mostrar_carteira(rodar_carteira(periodo="max", inicio="2007-01-01",
-                                        fim="2017-10-13", nucleo="IBOV"))
+        res = rodar_carteira(periodo="max", inicio="2007-01-01", fim="2017-10-13",
+                             nucleo="IBOV")
     else:
-        mostrar_carteira(rodar_carteira())
+        res = rodar_carteira()
+    mostrar_carteira(res)
+    for nome in ("2) Aporte dirigido", "2) Dirigido, limite 25%"):
+        tab = concentracao(res, nome)
+        print(f"\nConcentração — {nome} (% do aportado): " + ", ".join(
+            f"{a} {v:.0%}" for a, v in tab["% do aportado"].items()))
