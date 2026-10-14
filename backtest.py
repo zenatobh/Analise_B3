@@ -41,17 +41,18 @@ INICIO = JANELA_PLOT         # 1º pregão avaliado: bandas μ/σ já com 248 pr
 ACOES = [t for t in TICKERS if not t.startswith("^") and not t.endswith("=X")]
 
 SGS_CDI = "https://api.bcb.gov.br/dados/serie/bcdata.sgs.12/dados"   # % ao dia útil
+SGS_CDI_MES = "https://api.bcb.gov.br/dados/serie/bcdata.sgs.4391/dados"  # % acum. no mês
 CACHE_CDI = "cdi_cache.csv"   # cópia local das taxas (evita depender do Banco Central)
 
 
 # ----------------------------------------------------------------------------
 # Dados
 # ----------------------------------------------------------------------------
-def _consultar_sgs(ini, fim, tentativas=5, espera=15):
+def _consultar_sgs(ini, fim, tentativas=3, espera=10, url=SGS_CDI):
     """Uma consulta ao SGS, com novas tentativas (o servidor às vezes dá 502/504)."""
     for k in range(tentativas):
         try:
-            r = requests.get(SGS_CDI, timeout=60, params={
+            r = requests.get(url, timeout=60, params={
                 "formato": "json", "dataInicial": f"{ini:%d/%m/%Y}",
                 "dataFinal": f"{fim:%d/%m/%Y}"})
             if r.status_code == 404:          # nenhum dado no intervalo (ex.: só hoje)
@@ -79,12 +80,41 @@ def _baixar_taxas(inicio, fim, anos=2):
                      index=pd.to_datetime(df["data"], dayfirst=True))
 
 
+def _taxas_do_mensal(inicio, fim):
+    """
+    Alternativa quando a série diária falha: CDI acumulado no mês (série 4391),
+    distribuído igualmente pelos dias úteis de cada mês. O total de cada mês é exato.
+    """
+    dados = _consultar_sgs(inicio, fim, url=SGS_CDI_MES)
+    taxas = []
+    for item in dados:
+        m0 = pd.to_datetime(item["data"], dayfirst=True)
+        m1 = min(m0 + pd.offsets.MonthEnd(0), pd.Timestamp(fim))   # mês corrente: até `fim`
+        dias = pd.bdate_range(max(m0, pd.Timestamp(inicio)), m1)
+        if len(dias):
+            diaria = (1 + float(item["valor"]) / 100) ** (1 / len(pd.bdate_range(m0, m1))) - 1
+            taxas.append(pd.Series(diaria, index=dias))
+    return pd.concat(taxas) if taxas else pd.Series(dtype=float)
+
+
 def baixar_cdi(inicio, fim, cache=CACHE_CDI):
     """
     Índice acumulado do CDI (1,0 no primeiro dia) entre as datas. Guarda as taxas em
-    `cache` (CSV na pasta atual) e só consulta o Banco Central o que faltar.
+    `cache` (CSV na pasta atual) e só consulta o Banco Central o que faltar. Se a série
+    diária estiver fora do ar, usa a mensal (sem gravar no cache).
     """
     inicio, fim = pd.Timestamp(inicio), pd.Timestamp(fim)
+    try:
+        return _baixar_cdi_diario(inicio, fim, cache)
+    except (requests.RequestException, ValueError) as e:
+        print(f"CDI diário indisponível ({e}); usando o CDI mensal do Banco Central.")
+        taxa = _taxas_do_mensal(inicio, fim).loc[inicio:fim]
+        if taxa.empty:
+            raise ValueError("o Banco Central não devolveu dados do CDI no período")
+        return (1 + taxa).cumprod()
+
+
+def _baixar_cdi_diario(inicio, fim, cache):
     taxa = pd.Series(dtype=float)
     if cache and os.path.exists(cache):
         taxa = pd.read_csv(cache, index_col=0, parse_dates=True).iloc[:, 0]
