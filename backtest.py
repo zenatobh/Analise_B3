@@ -24,6 +24,9 @@ ou, para explorar:
 Cuidados: as ações testadas são as grandes de hoje (viés de sobrevivência); custos
 aproximados; IR fora; resultado passado não garante resultado futuro.
 """
+import os
+import time
+
 import numpy as np
 import pandas as pd
 import requests
@@ -38,33 +41,70 @@ INICIO = JANELA_PLOT         # 1º pregão avaliado: bandas μ/σ já com 248 pr
 ACOES = [t for t in TICKERS if not t.startswith("^") and not t.endswith("=X")]
 
 SGS_CDI = "https://api.bcb.gov.br/dados/serie/bcdata.sgs.12/dados"   # % ao dia útil
+CACHE_CDI = "cdi_cache.csv"   # cópia local das taxas (evita depender do Banco Central)
 
 
 # ----------------------------------------------------------------------------
 # Dados
 # ----------------------------------------------------------------------------
-def baixar_cdi(inicio, fim):
-    """
-    Índice acumulado do CDI (1,0 no primeiro dia) entre as datas. O SGS limita cada
-    consulta diária a 10 anos; baixa em blocos de 5.
-    """
-    partes, ini = [], pd.Timestamp(inicio)
-    fim = pd.Timestamp(fim)
-    while ini <= fim:
-        f = min(ini + pd.DateOffset(years=5) - pd.Timedelta(days=1), fim)
-        r = requests.get(SGS_CDI, timeout=30, params={
-            "formato": "json", "dataInicial": f"{ini:%d/%m/%Y}", "dataFinal": f"{f:%d/%m/%Y}"})
-        # 404 = nenhum dado no intervalo (ex.: só o dia de hoje, CDI ainda não publicado)
-        if r.status_code != 404:
+def _consultar_sgs(ini, fim, tentativas=5, espera=15):
+    """Uma consulta ao SGS, com novas tentativas (o servidor às vezes dá 502/504)."""
+    for k in range(tentativas):
+        try:
+            r = requests.get(SGS_CDI, timeout=60, params={
+                "formato": "json", "dataInicial": f"{ini:%d/%m/%Y}",
+                "dataFinal": f"{fim:%d/%m/%Y}"})
+            if r.status_code == 404:          # nenhum dado no intervalo (ex.: só hoje)
+                return []
             r.raise_for_status()
-            partes += r.json()
+            return r.json()
+        except (requests.RequestException, ValueError) as e:
+            if k == tentativas - 1:
+                raise
+            print(f"CDI {ini:%m/%Y}–{fim:%m/%Y}: falha ({e}); nova tentativa em {espera} s")
+            time.sleep(espera)
+
+
+def _baixar_taxas(inicio, fim, anos=2):
+    """Taxas diárias do CDI (fração) em blocos de `anos` anos."""
+    partes, ini = [], pd.Timestamp(inicio)
+    while ini <= fim:
+        f = min(ini + pd.DateOffset(years=anos) - pd.Timedelta(days=1), pd.Timestamp(fim))
+        partes += _consultar_sgs(ini, f)
         ini = f + pd.Timedelta(days=1)
     if not partes:
-        raise ValueError("o Banco Central não devolveu dados do CDI no período")
+        return pd.Series(dtype=float)
     df = pd.DataFrame(partes)
-    taxa = pd.Series(pd.to_numeric(df["valor"]).to_numpy() / 100,
+    return pd.Series(pd.to_numeric(df["valor"]).to_numpy() / 100,
                      index=pd.to_datetime(df["data"], dayfirst=True))
-    taxa = taxa[~taxa.index.duplicated()].sort_index()
+
+
+def baixar_cdi(inicio, fim, cache=CACHE_CDI):
+    """
+    Índice acumulado do CDI (1,0 no primeiro dia) entre as datas. Guarda as taxas em
+    `cache` (CSV na pasta atual) e só consulta o Banco Central o que faltar.
+    """
+    inicio, fim = pd.Timestamp(inicio), pd.Timestamp(fim)
+    taxa = pd.Series(dtype=float)
+    if cache and os.path.exists(cache):
+        taxa = pd.read_csv(cache, index_col=0, parse_dates=True).iloc[:, 0]
+    novos = []
+    if taxa.empty:
+        novos.append(_baixar_taxas(inicio, fim))
+    else:
+        if inicio < taxa.index[0]:
+            novos.append(_baixar_taxas(inicio, taxa.index[0] - pd.Timedelta(days=1)))
+        if taxa.index[-1] < fim:
+            novos.append(_baixar_taxas(taxa.index[-1] + pd.Timedelta(days=1), fim))
+    novos = [n for n in novos if not n.empty]
+    if novos:
+        taxa = pd.concat([taxa] + novos)
+        taxa = taxa[~taxa.index.duplicated()].sort_index()
+        if cache:
+            taxa.rename("cdi").to_csv(cache)
+    taxa = taxa.loc[inicio:fim]
+    if taxa.empty:
+        raise ValueError("o Banco Central não devolveu dados do CDI no período")
     return (1 + taxa).cumprod()
 
 
