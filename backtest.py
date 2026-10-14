@@ -58,7 +58,12 @@ def _consultar_sgs(ini, fim, tentativas=3, espera=10, url=SGS_CDI):
             if r.status_code == 404:          # nenhum dado no intervalo (ex.: só hoje)
                 return []
             r.raise_for_status()
-            return r.json()
+            dados = r.json()
+            # Às vezes o SGS responde 200 com outro conteúdo (aviso, erro em JSON)
+            if not isinstance(dados, list) or (dados and not (
+                    isinstance(dados[0], dict) and {"data", "valor"} <= dados[0].keys())):
+                raise ValueError(f"resposta inesperada do Banco Central: {str(dados)[:80]}")
+            return dados
         except (requests.RequestException, ValueError) as e:
             if k == tentativas - 1:
                 raise
@@ -122,10 +127,17 @@ def _baixar_cdi_diario(inicio, fim, cache):
     if taxa.empty:
         novos.append(_baixar_taxas(inicio, fim))
     else:
-        if inicio < taxa.index[0]:
+        if (taxa.index[0] - inicio).days > 5:      # fim de semana/feriado no início: ok
             novos.append(_baixar_taxas(inicio, taxa.index[0] - pd.Timedelta(days=1)))
         if taxa.index[-1] < fim:
-            novos.append(_baixar_taxas(taxa.index[-1] + pd.Timedelta(days=1), fim))
+            try:
+                novos.append(_baixar_taxas(taxa.index[-1] + pd.Timedelta(days=1), fim))
+            except (requests.RequestException, ValueError) as e:
+                # Cache quase em dia: segue com ele (faltam só os últimos dias)
+                if (fim - taxa.index[-1]).days > 10:
+                    raise
+                print(f"CDI dos últimos dias indisponível ({e}); usando o cache até "
+                      f"{taxa.index[-1]:%d/%m/%Y}.")
     novos = [n for n in novos if not n.empty]
     if novos:
         taxa = pd.concat(([taxa] if not taxa.empty else []) + novos)
