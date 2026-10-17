@@ -16,7 +16,7 @@ Streamlit: chame as funções de plot com mostrar=False e use a figura retornada
 """
 import os
 import re
-from datetime import datetime, time
+from datetime import date, datetime, time, timedelta
 from itertools import cycle
 from time import sleep
 from zoneinfo import ZoneInfo
@@ -72,6 +72,11 @@ EMA_FAST, EMA_SLOW, EMA_MEDIUM, EMA_LONG = 21, 55, 34, 89   # EMA_MEDIUM não é
 MMA_RAPIDA, MMA_LENTA = 63, 84
 K_SIGMA = 1          # teto da entrada (+1σ)
 K_STOP_GAIN = 1.8    # +1,8σ
+
+# Modo B — dia do aporte mensal: 1º pregão da B3 com dia do mês >= DIA_APORTE
+# (dia 15 em fim de semana ou feriado → pregão seguinte). Usado por app, alerta e
+# backtest_carteira.py. Era o 1º pregão do mês até 17/10/2026.
+DIA_APORTE = 15
 
 # Antes deste horário (Brasília), uma barra com a data de hoje é tratada como
 # provisória: pregão em andamento, o "fechamento" ainda é o preço corrente.
@@ -448,7 +453,7 @@ def tabela_painel(precos, dias=JANELA_PLOT, k_gain=K_STOP_GAIN):
 # ----------------------------------------------------------------------------
 # Modo B — aporte do mês (acumulação: compra uma vez por mês e nunca vende)
 # ----------------------------------------------------------------------------
-# No dia do aporte, entre as ações operáveis e os ativos de SO_MODO_B (IVVB11):
+# No dia do aporte (1º pregão a partir do dia DIA_APORTE), entre as ações operáveis e os ativos de SO_MODO_B (IVVB11):
 #   - se algum tem COMPRAR hoje (as três condições de entrada), o aporte vai para ele
 #     (dividido igualmente se houver mais de um);
 #   - senão, vai para o de σ da média mais negativo (o mais abaixo da média de 1 ano).
@@ -473,6 +478,55 @@ def ranking_aporte(precos, ativos=None):
     rk = pd.DataFrame.from_dict(linhas, orient="index",
                                 columns=["comprar", "dia_n", "sigma", "preco", "data"])
     return rk.sort_values(["comprar", "sigma"], ascending=[False, True])
+
+
+def dias_de_aporte(datas, dia=DIA_APORTE):
+    """
+    Máscara (array de bool, mesmo tamanho de `datas`, em ordem crescente): True no
+    1º pregão de cada mês com dia do mês >= `dia`. Um mês cujos dados começam depois
+    do dia `dia` tem o aporte no primeiro pregão disponível.
+    """
+    idx = pd.DatetimeIndex(datas)
+    elegivel = pd.Series(idx.day >= dia)
+    ordem = elegivel.groupby(np.asarray(idx.to_period("M"))).cumsum()
+    return (elegivel & (ordem == 1)).to_numpy()
+
+
+def _datas_b3(precos):
+    """Pregões da B3 nos dados (sem os ativos negociados em outro calendário)."""
+    fora = {"SP500", "USDBRL"}
+    return precos[[t for t in precos.columns if t not in fora]].dropna(how="all").index
+
+
+def e_dia_de_aporte(precos, dia=None):
+    """True se `dia` (date; padrão = último pregão da B3 nos dados) é dia de aporte."""
+    datas = _datas_b3(precos)
+    if len(datas) == 0:
+        return False
+    dia = dia or datas[-1].date()
+    marcados = datas[dias_de_aporte(datas)]
+    return any(d.date() == dia for d in marcados)
+
+
+def proximo_aporte(precos):
+    """
+    Data do próximo aporte do modo B, a partir do último pregão da B3 nos dados:
+    o próprio dia, se ele for dia de aporte; senão o dia DIA_APORTE deste mês (se ainda
+    não chegou) ou do mês seguinte, levado para segunda-feira se cair no fim de semana.
+    Feriados não são conhecidos de antemão (nesse caso vale o pregão seguinte).
+    """
+    datas = _datas_b3(precos)
+    ult = datas[-1].date()
+    if e_dia_de_aporte(precos, ult):
+        return ult
+    if ult.day < DIA_APORTE:
+        alvo = date(ult.year, ult.month, DIA_APORTE)
+    else:
+        ano, mes = (ult.year + 1, 1) if ult.month == 12 else (ult.year, ult.month + 1)
+        alvo = date(ano, mes, DIA_APORTE)
+    while alvo.weekday() >= 5:            # sábado/domingo → segunda
+        alvo += timedelta(days=1)
+    return alvo
 
 
 def aporte_do_mes(precos, ativos=None):

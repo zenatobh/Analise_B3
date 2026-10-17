@@ -3,7 +3,9 @@ backtest_carteira.py — carteira única com aporte mensal: compara formas de us
 do app com comprar e segurar e com o CDI, incluindo custos e imposto de renda.
 
 Premissas (fixadas antes de ver os resultados):
-    aporte       R$ 1.000 no 1º pregão de cada mês; ações fracionárias
+    aporte       R$ 1.000 no 1º pregão a partir do dia 15 de cada mês (DIA_APORTE de
+                 analise_ativos.py; era o 1º pregão do mês até 17/10/2026), em todas as
+                 estratégias; ações fracionárias
     custo        0,05% por ordem (compra e venda)
     caixa        dinheiro livre aplicado no CDI (lotes com IR regressivo: 22,5% até
                  180 dias, 20% até 360, 17,5% até 720, 15% acima; resgate do mais antigo)
@@ -42,8 +44,8 @@ import sys
 import numpy as np
 import pandas as pd
 
-from analise_ativos import (K_STOP_GAIN, baixar_precos, bandas_moveis, no_modo_b, operavel,
-                            serie, sinal_compra)
+from analise_ativos import (DIA_APORTE, K_STOP_GAIN, baixar_precos, bandas_moveis,
+                            dias_de_aporte, no_modo_b, operavel, serie, sinal_compra)
 from backtest import ACOES, CUSTO, INICIO, _cdi_nas_datas, baixar_cdi
 
 APORTE = 1000.0
@@ -215,7 +217,7 @@ def simular(est, d, cal, r_cdi, nucleo, ir=True, aporte=APORTE):
     c = Carteira(ir=ir)
     px, ativo, pronto = d["px"], d["ativo"], d["pronto"]
     meses = cal.to_period("M")
-    primeiro = np.r_[True, meses[1:] != meses[:-1]]
+    dia_aporte = dias_de_aporte(cal)            # 1º pregão a partir do dia DIA_APORTE
     ultimo = np.r_[meses[:-1] != meses[1:], True]
     tipo, universo = est["tipo"], est.get("universo", [])
     devido, cotas = 0.0, 0.0
@@ -239,7 +241,7 @@ def simular(est, d, cal, r_cdi, nucleo, ir=True, aporte=APORTE):
                     c.aplicar(t, c.vender(a, p_t[a], i))
 
         # 2) Aporte do mês (primeiro abate IR que ficou devido)
-        if primeiro[i]:
+        if dia_aporte[i]:
             p_antes = c.patrimonio(p_t)
             cotas += aporte if cotas == 0 else aporte / (p_antes / cotas)
             fluxos.append((t, aporte))
@@ -393,7 +395,8 @@ def _reais(v):
 
 def mostrar_carteira(res):
     ini, fim = res["periodo"]
-    print(f"Carteira com aporte de R$ {_reais(APORTE)} no 1º pregão de cada mês, "
+    print(f"Carteira com aporte de R$ {_reais(APORTE)} no 1º pregão a partir do dia "
+          f"{DIA_APORTE} de cada mês, "
           f"{ini:%m/%Y} a {fim:%m/%Y}. Stop gain +{K_STOP_GAIN:g}σ, sem stop loss; "
           f"custo {CUSTO:.2%} por ordem; IR {'incluído' if res['ir'] else 'fora'}."
           .replace("0.05%", "0,05%").replace("+1.8σ", "+1,8σ"))

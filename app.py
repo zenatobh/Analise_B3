@@ -10,8 +10,9 @@ import pandas as pd
 import streamlit as st
 
 from analise_ativos import (HORA_CONSOLIDADO, JANELA_PLOT, K_SIGMA, K_STOP_GAIN,
-                            ACOMPANHAMENTO, MMA_LENTA, MMA_RAPIDA, NAO_ACOES, SO_MODO_B,
-                            TICKERS, aporte_do_mes, sinal_compra,
+                            ACOMPANHAMENTO, DIA_APORTE, MMA_LENTA, MMA_RAPIDA, NAO_ACOES,
+                            SO_MODO_B, TICKERS, aporte_do_mes, e_dia_de_aporte,
+                            proximo_aporte, sinal_compra,
                             bandas_fixas, base_12m, baixar_precos, falhas, moeda,
                             provisorio, reserva, serie, sinal_hoje, tabela_painel,
                             tabela_resumo)
@@ -172,8 +173,11 @@ with aba_ativo:
 # Aba 2 — visão geral de todos os ativos
 # ----------------------------------------------------------------------------
 with aba_painel:
-    # Modo B — aporte do mês: COMPRAR hoje (dividindo) ou o mais abaixo da média
+    # Modo B — aporte do mês: COMPRAR hoje (dividindo) ou o mais abaixo da média.
+    # Só vale para comprar no dia do aporte (1º pregão a partir do dia DIA_APORTE);
+    # nos outros dias o cartão mostra a indicação de hoje e a data do próximo aporte.
     ap = aporte_do_mes(precos)
+    hoje_aporte = e_dia_de_aporte(precos)
     if ap["ativos"]:
         rk = ap["ranking"]
         if ap["motivo"] == "comprar":
@@ -186,11 +190,16 @@ with aba_painel:
             motivo = f"a mais abaixo da média ({em_sigma(rk.at[onde, 'sigma'])})"
         seguintes = [a for a in rk.index if a not in ap["ativos"]][:3]
         fila = " · ".join(f"{a} ({em_sigma(rk.at[a, 'sigma'])})" for a in seguintes)
-        st.info(f"**Modo B — aporte de hoje: {onde}**  \n{motivo}  \n"
-                f"Seguintes: {fila}", icon="💰")
-        st.caption("Modo B: compre no dia do aporte e não venda — o STOP GAIN é só do "
-                   "modo A. Prioridade para COMPRAR hoje; sem sinal, a mais abaixo da "
-                   f"média dos últimos {JANELA_PLOT} pregões (coluna σ da média)."
+        if hoje_aporte:
+            titulo = f"**Modo B — aporte de hoje: {onde}**"
+        else:
+            titulo = (f"**Modo B — próximo aporte: {proximo_aporte(precos):%d/%m}**  \n"
+                      f"Se fosse hoje: {onde}")
+        st.info(f"{titulo}  \n{motivo}  \nSeguintes: {fila}", icon="💰")
+        st.caption(f"Modo B: compre no dia do aporte (1º pregão a partir do dia "
+                   f"{DIA_APORTE}; feriado → pregão seguinte) e não venda — o STOP GAIN é "
+                   "só do modo A. Prioridade para COMPRAR no dia; sem sinal, a mais abaixo "
+                   f"da média dos últimos {JANELA_PLOT} pregões (coluna σ da média)."
                    + (" ⏳ Pregão em andamento: indicação provisória."
                       if any(provisorio(precos, a) for a in ap["ativos"]) else ""))
 

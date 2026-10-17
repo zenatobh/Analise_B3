@@ -11,7 +11,8 @@ A mensagem separa as duas estratégias:
                          vale só para o que foi comprado pelo modo A
     IBOV, S&P 500, dólar e BOVA11 são só acompanhamento: nunca geram sinal.
     IVVB11 não gera sinal do modo A, mas concorre no aporte do mês (modo B).
-    🅱️ Modo B — aporte do mês (só no 1º pregão de cada mês na B3):
+    🅱️ Modo B — aporte do mês (só no 1º pregão da B3 a partir do dia 15 de cada mês;
+       dia 15 em fim de semana ou feriado → pregão seguinte — DIA_APORTE):
         💰 onde aportar: COMPRAR hoje (dividindo) ou o mais abaixo da média; nunca vende
 Pregão de referência = data de 12 h atrás (Brasília): a execução das 19h47 aponta
 para o próprio dia e uma execução que o GitHub atrase para a madrugada continua
@@ -37,9 +38,9 @@ from datetime import datetime, timedelta
 
 import requests
 
-from analise_ativos import (FUSO, K_STOP_GAIN, SO_MODO_B, TICKERS, aporte_do_mes,
-                            baixar_precos, falhas, moeda, no_modo_b, reserva, serie,
-                            sinal_hoje)
+from analise_ativos import (DIA_APORTE, FUSO, K_STOP_GAIN, SO_MODO_B, TICKERS,
+                            aporte_do_mes, baixar_precos, e_dia_de_aporte, falhas, moeda,
+                            no_modo_b, reserva, serie, sinal_hoje)
 
 URL_APP = "https://ativos-b3.streamlit.app"   # ajuste se o endereço do app for outro
 
@@ -161,13 +162,6 @@ def ativos_b3_no_dia(precos, dia):
     return [t for t in precos.columns if t not in FORA_B3 and tem_pregao(precos, t, dia)]
 
 
-def primeiro_pregao_do_mes(precos, dia):
-    """True se `dia` é o primeiro pregão da B3 no mês (pelos próprios dados)."""
-    datas = precos[[t for t in precos.columns if t not in FORA_B3]].dropna(how="all").index
-    return not any(d.month == dia.month and d.year == dia.year and d.date() < dia
-                   for d in datas)
-
-
 def resumo_teste(precos):
     linhas = ["🧪 <b>Teste do alerta</b> — situação de todos os ativos", TITULO_A]
     for ticker in precos.columns:
@@ -184,7 +178,7 @@ def resumo_teste(precos):
     if b:
         linhas.append(b.replace("aporte do mês</b>",
                                 "aporte do mês</b> (no teste, sempre; de verdade, só no "
-                                "1º pregão do mês)"))
+                                f"1º pregão a partir do dia {DIA_APORTE})"))
     return "\n\n".join(linhas)
 
 
@@ -227,7 +221,7 @@ def main():
             partes.append(bloco_a(msgs))
     else:
         partes = [f"📈 <b>{dia:%d/%m/%Y}</b>", bloco_a(msgs)]
-        if primeiro_pregao_do_mes(precos, dia):
+        if e_dia_de_aporte(precos, dia):
             b = bloco_b(precos, ativos_b3_no_dia(precos, dia))
             if b:
                 partes.append(b)
