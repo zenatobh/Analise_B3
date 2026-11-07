@@ -1,0 +1,74 @@
+# Checagem do histórico do Yahoo para os ativos de TICKERS (analise_ativos.py).
+# Roda manualmente (ou quando este arquivo muda) e grava o resultado em
+# checagem_historico.md na main: 1º e último pregão, nº de pregões e as 3 maiores
+# variações diárias de cada ativo (degraus de ±50% indicam desdobramento não ajustado).
+# ELET3/ELET6 entram para comparar com a AXIA3 (ex-Eletrobras).
+name: Checar histórico dos ativos
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/checar_historico.yml"]
+
+permissions:
+  contents: write
+
+jobs:
+  checar:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependências (mesmas versões do app)
+        run: pip install -r requirements.txt
+
+      - name: Checar histórico
+        shell: python
+        run: |
+          from datetime import datetime, timezone
+          import yfinance as yf
+          from analise_ativos import TICKERS, normalizar_tickers, _nome
+
+          tickers = normalizar_tickers(TICKERS) + ["ELET3.SA", "ELET6.SA"]
+          linhas = [
+              "# Checagem do histórico do Yahoo",
+              "",
+              f"Gerado em {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC (período: max, auto_adjust=True).",
+              "",
+              "| Ativo | 1º pregão | Último pregão | Pregões | 3 maiores variações diárias |",
+              "|---|---|---|---|---|",
+          ]
+          for tk in tickers:
+              try:
+                  s = yf.download(tk, period="max", auto_adjust=True,
+                                  progress=False)["Close"].squeeze().dropna()
+              except Exception as e:
+                  s, erro = None, str(e)[:60]
+              if s is None or s.empty:
+                  linhas.append(f"| {_nome(tk)} | — | — | 0 | sem dados |")
+                  continue
+              r = s.pct_change().dropna()
+              top = r.abs().nlargest(3).index
+              saltos = ", ".join(f"{d:%Y-%m-%d} {r[d]:+.0%}" for d in top)
+              linhas.append(f"| {_nome(tk)} | {s.index[0]:%Y-%m-%d} | {s.index[-1]:%Y-%m-%d} "
+                            f"| {len(s)} | {saltos} |")
+          texto = "\n".join(linhas) + "\n"
+          print(texto)
+          open("checagem_historico.md", "w", encoding="utf-8").write(texto)
+
+      - name: Gravar resultado na main
+        run: |
+          cat checagem_historico.md >> "$GITHUB_STEP_SUMMARY"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add checagem_historico.md
+          git commit -m "Checagem do histórico dos ativos ($(date -u +%Y-%m-%d))" || exit 0
+          git pull --rebase -q origin main
+          git push
