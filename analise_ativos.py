@@ -30,7 +30,16 @@ import yfinance as yf
 # ----------------------------------------------------------------------------
 # Configuração
 # ----------------------------------------------------------------------------
-TICKERS = ["ITUB4", "BBAS3", "PETR4", "VALE3", "ABEV3", "VIVT3", "BBSE3",
+# Mandato: bancos, energia elétrica (+ só PETR4 em petróleo/gás), saneamento,
+# seguridade e telecom; VALE3 e IVVB11 como inclusões nominais (teto 5% cada).
+# AXIA3: AXIA5/AXIA6 foram convertidas em AXIA3 (1,1 ON por PN) e saíram da B3 em 08/06/2026.
+TICKERS = ["ITUB4", "BBAS3",                     # bancos
+           "AXIA3", "TAEE11",                    # energia elétrica (geração | transmissão)
+           "PETR4",                              # petróleo/gás
+           "SBSP3",                              # saneamento
+           "BBSE3", "CXSE3",                     # seguridade
+           "VIVT3",                              # telecom
+           "VALE3",                              # inclusão nominal
            "BOVA11", "IVVB11", "^BVSP", "^GSPC", "USDBRL=X"]
 
 NOMES = {"^BVSP": "IBOV", "^GSPC": "SP500", "USDBRL=X": "USDBRL"}
