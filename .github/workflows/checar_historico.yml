@@ -30,8 +30,10 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Checar histórico
-        shell: python
+        # python - (stdin): o diretório atual (repositório) entra no sys.path; com
+        # shell: python o script roda de _temp e o import de analise_ativos falha.
         run: |
+          python - <<'PY'
           from datetime import datetime, timezone
           import yfinance as yf
           from analise_ativos import TICKERS, normalizar_tickers, _nome
@@ -62,6 +64,7 @@ jobs:
           texto = "\n".join(linhas) + "\n"
           print(texto)
           open("checagem_historico.md", "w", encoding="utf-8").write(texto)
+          PY
 
       - name: Gravar resultado na main
         run: |
