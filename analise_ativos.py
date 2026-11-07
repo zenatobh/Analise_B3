@@ -16,7 +16,7 @@ Streamlit: chame as funções de plot com mostrar=False e use a figura retornada
 """
 import os
 import re
-from datetime import date, datetime, time, timedelta
+from datetime import datetime, time
 from itertools import cycle
 from time import sleep
 from zoneinfo import ZoneInfo
@@ -31,7 +31,7 @@ import yfinance as yf
 # Configuração
 # ----------------------------------------------------------------------------
 # Mandato: bancos, energia elétrica (+ só PETR4 em petróleo/gás), saneamento,
-# seguridade e telecom; VALE3 e IVVB11 como inclusões nominais (teto 5% cada).
+# seguridade e telecom; VALE3 como inclusão nominal (teto 5%).
 # AXIA3: AXIA5/AXIA6 foram convertidas em AXIA3 (1,1 ON por PN) e saíram da B3 em 08/06/2026.
 TICKERS = ["ITUB4", "BBAS3",                     # bancos
            "AXIA3", "TAEE11",                    # energia elétrica (geração | transmissão)
@@ -40,26 +40,17 @@ TICKERS = ["ITUB4", "BBAS3",                     # bancos
            "BBSE3", "CXSE3",                     # seguridade
            "VIVT3",                              # telecom
            "VALE3",                              # inclusão nominal
-           "BOVA11", "IVVB11", "^BVSP", "^GSPC", "USDBRL=X"]
+           "BOVA11", "^BVSP", "^GSPC", "USDBRL=X"]
 
 NOMES = {"^BVSP": "IBOV", "^GSPC": "SP500", "USDBRL=X": "USDBRL"}
 NAO_ACOES = list(NOMES.values())                 # índices e câmbio (fora da aba Resumo)
-# Só no aporte do mês (modo B): concorrem na fila do aporte, mas sem sinais do modo A.
-# IVVB11: no teste (13/10/2026) a regra do modo A não combinou com ele (poucas entradas,
-# perde muito para comprar e segurar), mas no modo B melhorou retorno e queda.
-SO_MODO_B = ["IVVB11"]
-# Sem sinais de COMPRAR / STOP GAIN (modo A): aparecem no app (gráficos, Painel)
-ACOMPANHAMENTO = NAO_ACOES + ["BOVA11"] + SO_MODO_B
+# Sem sinais de COMPRAR / STOP GAIN: aparecem no app (gráficos, Painel)
+ACOMPANHAMENTO = NAO_ACOES + ["BOVA11"]
 
 
 def operavel(ticker):
-    """True se o ativo recebe sinais do modo A (COMPRAR / STOP GAIN)."""
+    """True se o ativo recebe sinais (COMPRAR / STOP GAIN)."""
     return ticker not in ACOMPANHAMENTO
-
-
-def no_modo_b(ticker):
-    """True se o ativo concorre no aporte do mês (modo B)."""
-    return operavel(ticker) or ticker in SO_MODO_B
 
 DIAS_UTEIS_ANO = 252   # pregões em 12 meses
 JANELA_PLOT = 248      # janela das bandas (μ, σ) e período padrão dos gráficos
@@ -81,11 +72,6 @@ EMA_FAST, EMA_SLOW, EMA_MEDIUM, EMA_LONG = 21, 55, 34, 89   # EMA_MEDIUM não é
 MMA_RAPIDA, MMA_LENTA = 63, 84
 K_SIGMA = 1          # teto da entrada (+1σ)
 K_STOP_GAIN = 1.8    # +1,8σ
-
-# Modo B — dia do aporte mensal: 1º pregão da B3 com dia do mês >= DIA_APORTE
-# (dia 15 em fim de semana ou feriado → pregão seguinte). Usado por app, alerta e
-# backtest_carteira.py. Era o 1º pregão do mês até 17/10/2026.
-DIA_APORTE = 15
 
 # Antes deste horário (Brasília), uma barra com a data de hoje é tratada como
 # provisória: pregão em andamento, o "fechamento" ainda é o preço corrente.
@@ -423,7 +409,7 @@ def sinal_hoje(precos, ticker, k_gain=K_STOP_GAIN):
 
 
 ROTULO_SINAL = {"comprar": "🟢 COMPRAR", "gain": "✅ STOP GAIN", None: "⚪ —",
-                "acompanhamento": "👁 acompanhamento", "so_b": "👁 só no aporte (B)"}
+                "acompanhamento": "👁 acompanhamento"}
 
 
 def tabela_painel(precos, dias=JANELA_PLOT, k_gain=K_STOP_GAIN):
@@ -442,8 +428,7 @@ def tabela_painel(precos, dias=JANELA_PLOT, k_gain=K_STOP_GAIN):
         comprar = sh["sinal"] == "comprar"
         mu, sd = bandas_fixas(s)
         linhas[ticker] = {
-            "Sinal":    ROTULO_SINAL[("so_b" if ticker in SO_MODO_B else "acompanhamento")
-                                     if sh["acompanhamento"] else sh["sinal"]],
+            "Sinal":    ROTULO_SINAL["acompanhamento" if sh["acompanhamento"] else sh["sinal"]],
             "Dia nº":   sh["dia_n"] if comprar else None,
             "Até gain": sh["ate_gain"] if comprar else np.nan,
             "Último":   ultimo,
@@ -457,100 +442,6 @@ def tabela_painel(precos, dias=JANELA_PLOT, k_gain=K_STOP_GAIN):
     painel = pd.DataFrame.from_dict(linhas, orient="index")
     painel["Dia nº"] = painel["Dia nº"].astype("Int64")      # inteiro com vazio
     return painel
-
-
-# ----------------------------------------------------------------------------
-# Modo B — aporte do mês (acumulação: compra uma vez por mês e nunca vende)
-# ----------------------------------------------------------------------------
-# No dia do aporte (1º pregão a partir do dia DIA_APORTE), entre as ações operáveis e os ativos de SO_MODO_B (IVVB11):
-#   - se algum tem COMPRAR hoje (as três condições de entrada), o aporte vai para ele
-#     (dividido igualmente se houver mais de um);
-#   - senão, vai para o de σ da média mais negativo (o mais abaixo da média de 1 ano).
-# É o "aporte dirigido" do backtest_carteira.py. O STOP GAIN não vale para estas compras.
-
-def ranking_aporte(precos, ativos=None):
-    """
-    Fila do modo B: primeiro os ativos com COMPRAR hoje, depois do mais ao menos
-    abaixo da média (σ da média = (preço − μ)/σ dos últimos JANELA_PLOT pregões).
-    Colunas: comprar, dia_n (pregões seguidos de COMPRAR), sigma, preco, data.
-    """
-    ativos = [a for a in (ativos if ativos is not None else precos.columns)
-              if a in precos.columns and no_modo_b(a)]
-    linhas = {}
-    for a in ativos:
-        s = serie(precos, a)
-        mu, sd = bandas_moveis(s)
-        dia_n = _dias_seguidos(sinal_compra(precos, a)["ativo"].to_numpy())
-        linhas[a] = {"comprar": dia_n > 0, "dia_n": dia_n or None,
-                     "sigma": (s.iloc[-1] - mu.iloc[-1]) / sd.iloc[-1],
-                     "preco": s.iloc[-1], "data": s.index[-1]}
-    rk = pd.DataFrame.from_dict(linhas, orient="index",
-                                columns=["comprar", "dia_n", "sigma", "preco", "data"])
-    return rk.sort_values(["comprar", "sigma"], ascending=[False, True])
-
-
-def dias_de_aporte(datas, dia=DIA_APORTE):
-    """
-    Máscara (array de bool, mesmo tamanho de `datas`, em ordem crescente): True no
-    1º pregão de cada mês com dia do mês >= `dia`. Um mês cujos dados começam depois
-    do dia `dia` tem o aporte no primeiro pregão disponível.
-    """
-    idx = pd.DatetimeIndex(datas)
-    elegivel = pd.Series(idx.day >= dia)
-    ordem = elegivel.groupby(np.asarray(idx.to_period("M"))).cumsum()
-    return (elegivel & (ordem == 1)).to_numpy()
-
-
-def _datas_b3(precos):
-    """Pregões da B3 nos dados (sem os ativos negociados em outro calendário)."""
-    fora = {"SP500", "USDBRL"}
-    return precos[[t for t in precos.columns if t not in fora]].dropna(how="all").index
-
-
-def e_dia_de_aporte(precos, dia=None):
-    """True se `dia` (date; padrão = último pregão da B3 nos dados) é dia de aporte."""
-    datas = _datas_b3(precos)
-    if len(datas) == 0:
-        return False
-    dia = dia or datas[-1].date()
-    marcados = datas[dias_de_aporte(datas)]
-    return any(d.date() == dia for d in marcados)
-
-
-def proximo_aporte(precos):
-    """
-    Data do próximo aporte do modo B, a partir do último pregão da B3 nos dados:
-    o próprio dia, se ele for dia de aporte; senão o dia DIA_APORTE deste mês (se ainda
-    não chegou) ou do mês seguinte, levado para segunda-feira se cair no fim de semana.
-    Feriados não são conhecidos de antemão (nesse caso vale o pregão seguinte).
-    """
-    datas = _datas_b3(precos)
-    ult = datas[-1].date()
-    if e_dia_de_aporte(precos, ult):
-        return ult
-    if ult.day < DIA_APORTE:
-        alvo = date(ult.year, ult.month, DIA_APORTE)
-    else:
-        ano, mes = (ult.year + 1, 1) if ult.month == 12 else (ult.year, ult.month + 1)
-        alvo = date(ano, mes, DIA_APORTE)
-    while alvo.weekday() >= 5:            # sábado/domingo → segunda
-        alvo += timedelta(days=1)
-    return alvo
-
-
-def aporte_do_mes(precos, ativos=None):
-    """
-    Indicação do modo B para hoje:
-      ativos  — onde aportar (todos os com COMPRAR, dividindo; ou o mais abaixo da média)
-      motivo  — "comprar" ou "desconto"
-      ranking — a fila completa (ranking_aporte)
-    """
-    rk = ranking_aporte(precos, ativos)
-    if rk.empty:
-        return {"ativos": [], "motivo": None, "ranking": rk}
-    if rk["comprar"].any():
-        return {"ativos": list(rk.index[rk["comprar"]]), "motivo": "comprar", "ranking": rk}
-    return {"ativos": [rk.index[0]], "motivo": "desconto", "ranking": rk}
 
 
 # ----------------------------------------------------------------------------

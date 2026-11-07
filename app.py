@@ -10,9 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from analise_ativos import (HORA_CONSOLIDADO, JANELA_PLOT, K_SIGMA, K_STOP_GAIN,
-                            ACOMPANHAMENTO, DIA_APORTE, MMA_LENTA, MMA_RAPIDA, NAO_ACOES,
-                            SO_MODO_B, TICKERS, aporte_do_mes, e_dia_de_aporte,
-                            proximo_aporte, sinal_compra,
+                            ACOMPANHAMENTO, MMA_LENTA, MMA_RAPIDA, NAO_ACOES, TICKERS,
                             bandas_fixas, base_12m, baixar_precos, falhas, moeda,
                             provisorio, reserva, serie, sinal_hoje, tabela_painel,
                             tabela_resumo)
@@ -56,12 +54,6 @@ def sinal_moeda(x):
 def sigma(k):
     """Nível em σ no formato brasileiro, com sinal: +2σ, −1,5σ."""
     return f"{k:+g}σ".replace(".", ",").replace("-", "−")
-
-
-def em_sigma(v):
-    """Distância em σ no formato brasileiro: +1,2σ, −0,8σ."""
-    v = round(v, 1) + 0.0        # evita "−0,0σ"
-    return f"{v:+.1f}σ".replace(".", ",").replace("-", "−").replace("+0,0", "0,0")
 
 
 def dia_txt(n):
@@ -139,24 +131,17 @@ with aba_ativo:
 
     # Sinal do dia: STOP GAIN prevalece sobre COMPRAR
     sh = sinal_hoje(precos, ticker, k_gain)
-    if sh["acompanhamento"] and ticker in SO_MODO_B:
-        cond = bool(sinal_compra(precos, ticker)["ativo"].iloc[-1])
-        st.info("**Só no aporte do mês (modo B)** — sem sinais do modo A.  \n"
-                "Condições de COMPRAR hoje: "
-                + ("**sim** (tem prioridade no aporte)" if cond else "não"), icon="👁")
-    elif sh["acompanhamento"]:
-        st.info("**Só acompanhamento** — sem sinais de compra (modos A e B).", icon="👁")
+    if sh["acompanhamento"]:
+        st.info("**Só acompanhamento** — sem sinais de compra.", icon="👁")
     elif sh["sinal"] == "comprar":
         st.success(f"**COMPRAR** · {dia_txt(sh['dia_n'])} · preço {moeda(sh['preco'])}  \n"
-                   f"Modo A: entrada; stop gain ({sigma(k_gain)}) em "
-                   f"{moeda(sh['stop_gain'])} ({pct(sh['ate_gain'])})  \n"
-                   "Modo B: prioridade no aporte do mês", icon="🟢")
+                   f"Stop gain ({sigma(k_gain)}) em "
+                   f"{moeda(sh['stop_gain'])} ({pct(sh['ate_gain'])})", icon="🟢")
     elif sh["sinal"] == "gain":
         op = sh["op"]
-        st.success(f"**STOP GAIN · modo A** a {moeda(op['preco_saida'])} · compra de "
+        st.success(f"**STOP GAIN** a {moeda(op['preco_saida'])} · compra de "
                    f"{op['entrada']:%d/%m/%y} a {moeda(op['preco_entrada'])} · "
-                   f"resultado **{pct(op['resultado'])}** em {op['dias']} pregões  \n"
-                   "Vale só para compras do modo A — no modo B não se vende.", icon="✅")
+                   f"resultado **{pct(op['resultado'])}** em {op['dias']} pregões", icon="✅")
     else:
         st.info(f"**Sem sinal hoje** — falta: {' e '.join(sh['faltam'])}", icon="⚪")
     if provisorio(precos, ticker):
@@ -173,42 +158,11 @@ with aba_ativo:
 # Aba 2 — visão geral de todos os ativos
 # ----------------------------------------------------------------------------
 with aba_painel:
-    # Modo B — aporte do mês: COMPRAR hoje (dividindo) ou o mais abaixo da média.
-    # Só vale para comprar no dia do aporte (1º pregão a partir do dia DIA_APORTE);
-    # nos outros dias o cartão mostra a indicação de hoje e a data do próximo aporte.
-    ap = aporte_do_mes(precos)
-    hoje_aporte = e_dia_de_aporte(precos)
-    if ap["ativos"]:
-        rk = ap["ranking"]
-        if ap["motivo"] == "comprar":
-            onde = " e ".join(ap["ativos"])
-            dias = ", ".join(f"{a} {dia_txt(int(rk.at[a, 'dia_n']))}" for a in ap["ativos"])
-            motivo = (f"COMPRAR hoje ({dias})"
-                      + (" — dividir o aporte igualmente" if len(ap["ativos"]) > 1 else ""))
-        else:
-            onde = ap["ativos"][0]
-            motivo = f"a mais abaixo da média ({em_sigma(rk.at[onde, 'sigma'])})"
-        seguintes = [a for a in rk.index if a not in ap["ativos"]][:3]
-        fila = " · ".join(f"{a} ({em_sigma(rk.at[a, 'sigma'])})" for a in seguintes)
-        if hoje_aporte:
-            titulo = f"**Modo B — aporte de hoje: {onde}**"
-        else:
-            titulo = (f"**Modo B — próximo aporte: {proximo_aporte(precos):%d/%m}**  \n"
-                      f"Se fosse hoje: {onde}")
-        st.info(f"{titulo}  \n{motivo}  \nSeguintes: {fila}", icon="💰")
-        st.caption(f"Modo B: compre no dia do aporte (1º pregão a partir do dia "
-                   f"{DIA_APORTE}; feriado → pregão seguinte) e não venda — o STOP GAIN é "
-                   "só do modo A. Prioridade para COMPRAR no dia; sem sinal, a mais abaixo "
-                   f"da média dos últimos {JANELA_PLOT} pregões (coluna σ da média)."
-                   + (" ⏳ Pregão em andamento: indicação provisória."
-                      if any(provisorio(precos, a) for a in ap["ativos"]) else ""))
-
     painel = tabela_painel(precos, dias=JANELA_PLOT, k_gain=k_gain)
-    st.caption(f"**Modo A** — entrada no COMPRAR (difusor short > long, "
+    st.caption(f"Entrada no COMPRAR (difusor short > long, "
                f"MMA{MMA_RAPIDA} > MMA{MMA_LENTA} e preço abaixo de {sigma(K_SIGMA)}); "
                f"saída no stop gain {sigma(k_gain)} (sem stop loss); fora das operações, "
-               f"CDI. 👁 = sem sinais do modo A ({', '.join(ACOMPANHAMENTO)}); "
-               f"{', '.join(SO_MODO_B)} entra só no aporte do mês (modo B). "
+               f"CDI. 👁 = sem sinais ({', '.join(ACOMPANHAMENTO)}). "
                f"Faixa, média e σ dos últimos {JANELA_PLOT} pregões. "
                "Toque no nome de uma coluna para ordenar.")
     prov = [a for a in painel.index if provisorio(precos, a)]
@@ -220,8 +174,8 @@ with aba_painel:
         height=35 * (len(painel) + 1) + 3,      # mostra todas as linhas sem rolagem
         column_config={
             "Sinal":    st.column_config.TextColumn(
-                "Sinal hoje", help="COMPRAR (modos A e B) ou STOP GAIN (só modo A) "
-                                   "no último pregão; 👁 = só acompanhamento"),
+                "Sinal hoje", help="COMPRAR ou STOP GAIN no último pregão; "
+                                   "👁 = só acompanhamento"),
             "Dia nº":   st.column_config.NumberColumn(
                 "Dia nº", format="%d",
                 help="COMPRAR: há quantos pregões seguidos as condições valem (1 = hoje)"),
@@ -248,7 +202,7 @@ with aba_painel:
 # ----------------------------------------------------------------------------
 with aba_resumo:
     dias = st.number_input("Últimos N pregões", 20, 750, 496, step=20)
-    etfs = [a for a in ("BOVA11", *SO_MODO_B) if a in precos.columns]
+    etfs = [a for a in ("BOVA11",) if a in precos.columns]
     incluir_etf = st.toggle(f"Incluir ETFs ({', '.join(etfs)})", value=True)
     excluir = NAO_ACOES if incluir_etf else NAO_ACOES + etfs
 
